@@ -81,6 +81,7 @@ async function loadTags() {
  * 初始化加载首页基础数据（漫剧 + 标签），并触发首屏渲染。
  */
 async function loadSeries() {
+  // 初始化加载：拉取漫剧和标签后，完成数据规范化并触发首屏渲染。
   try {
     const [seriesPayload] = await Promise.all([
       requestJsonApi('/api/series?page=1&pageSize=10000'),
