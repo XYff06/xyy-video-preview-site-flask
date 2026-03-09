@@ -3,35 +3,36 @@ const formatDateTime = (iso) => new Date(iso).toLocaleString('zh-CN', { hour12: 
 
 // 全局页面状态容器：集中管理首页、详情页和管理弹窗的 UI 状态。
 const appState = {
-  allSeries: [],
-  allTags: [],
-  selectedTag: null,
-  searchQuery: '',
-  sortBy: 'updated_desc',
-  currentPage: 1,
-  pageSize: 25,
-  homeSeries: [],
-  homeTotal: 0,
-  homeLoading: false,
-  homeError: null,
-  selectedEpisode: null,
-  episodePage: 1,
-  episodePageSize: 10,
-  detailSeriesName: '',
-  tagExpanded: false,
-  loading: true,
-  error: null,
-  activeAdminTab: 'tag',
-  adminModalOpen: false,
-  flashMessage: '',
-  flashAutoCloseTimeout: null,
-  flashVersion: 0,
-  flashVersionRendered: 0,
-  activeTagAction: 'create',
-  activeTitleAction: 'create',
-  activeEpisodeAction: 'create'
+  allSeries: [], // 全量漫剧数据（含剧集），作为首页与详情页的基础数据源。
+  allTags: [], // 后端标签接口返回的标签全集；用于管理弹窗和首页分类导航。
+  selectedTag: null, // 当前首页选中的标签筛选项，null 表示“全部”。
+  searchQuery: '', // 首页全局搜索关键词。
+  sortBy: 'updated_desc', // 首页排序方式（如更新时间倒序/名称顺序等）。
+  currentPage: 1, // 首页当前页码。
+  pageSize: 25, // 首页每页条数。
+  homeSeries: [], // 当前筛选条件下，本页要渲染的漫剧列表。
+  homeTotal: 0, // 当前筛选条件下的总条数，用于分页计算。
+  homeLoading: false, // 首页列表加载中状态。
+  homeError: null, // 首页列表加载失败信息。
+  selectedEpisode: null, // 详情页当前选中的集号。
+  episodePage: 1, // 详情页“剧集标签”的当前分页页码。
+  episodePageSize: 10, // 详情页每页展示多少个剧集标签。
+  detailSeriesName: '', // 当前详情页对应的漫剧名，用于切换漫剧时重置剧集分页。
+  tagExpanded: false, // 首页标签栏是否展开“更多标签”。
+  loading: true, // 全站首屏初始化加载状态（拉取漫剧与标签时使用）。
+  error: null, // 全站首屏初始化失败信息。
+  activeAdminTab: 'tag', // 管理弹窗当前主 Tab：tag/title/episode。
+  adminModalOpen: false, // 管理弹窗是否打开。
+  flashMessage: '', // 顶部闪现提示文案（成功/失败反馈）。
+  flashAutoCloseTimeout: null, // 闪现提示自动关闭的定时器句柄。
+  flashVersion: 0, // 闪现提示版本号：每次设置新消息都递增，避免重复计时。
+  flashVersionRendered: 0, // 已渲染过的闪现提示版本号。
+  activeTagAction: 'create', // 标签管理子 Tab：create/rename/delete。
+  activeTitleAction: 'create', // 漫剧管理子 Tab：create/rename/delete。
+  activeEpisodeAction: 'create' // 剧集管理子 Tab：create/batch/rename/delete。
 };
 
+// 获取当前路由中的漫剧名（URL Path 去掉开头斜杠并解码）。
 function getCurrentPathName() {
   return decodeURIComponent(location.pathname.slice(1));
 }
@@ -49,6 +50,7 @@ async function requestJsonApi(url, options = {}) {
   return payload;
 }
 
+// 仅加载标签数据，供首页分类和管理表单复用。
 async function loadTags() {
   const payload = await requestJsonApi('/api/tags');
   appState.allTags = payload.data;
@@ -113,6 +115,7 @@ async function loadHomeSeries() {
   render();
 }
 
+// 获取标签列表：优先使用后端标签全集，兜底从漫剧数据中反推。
 function getAllTags() {
   if (appState.allTags.length) return [...appState.allTags];
   return [...new Set(appState.allSeries.flatMap((item) => [...item.tags]))].sort((a, b) => a.localeCompare(b, 'zh-CN'));
@@ -128,33 +131,35 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
+// 规范化剧集：同一集号只保留“更新时间最新”的一条，并按集号升序。
 function normalizeEpisodes(episodes) {
-  const normalized = new Map();
+  const latestEpisodeByNumber = new Map();
 
   episodes.forEach((episode) => {
     const episodeNo = Number(episode.episode);
     if (!Number.isFinite(episodeNo)) return;
 
-    const current = normalized.get(episodeNo);
-    if (!current) {
-      normalized.set(episodeNo, { ...episode, episode: episodeNo });
+    const existingEpisode = latestEpisodeByNumber.get(episodeNo);
+    if (!existingEpisode) {
+      latestEpisodeByNumber.set(episodeNo, { ...episode, episode: episodeNo });
       return;
     }
 
-    const currentUpdatedAt = new Date(current.updatedAt || 0).getTime();
+    const currentUpdatedAt = new Date(existingEpisode.updatedAt || 0).getTime();
     const nextUpdatedAt = new Date(episode.updatedAt || 0).getTime();
     if (nextUpdatedAt >= currentUpdatedAt) {
-      normalized.set(episodeNo, { ...episode, episode: episodeNo });
+      latestEpisodeByNumber.set(episodeNo, { ...episode, episode: episodeNo });
     }
   });
 
-  return [...normalized.values()].sort((a, b) => a.episode - b.episode);
+  return [...latestEpisodeByNumber.values()].sort((a, b) => a.episode - b.episode);
 }
 
+// 根据漫剧名生成剧集下拉选项（用于“修改/删除剧集”等管理表单）。
 function getEpisodeOptionsByTitle(titleName) {
-  const target = appState.allSeries.find((series) => series.name === titleName);
-  if (!target) return [];
-  return normalizeEpisodes(target.episodes);
+  const matchedSeries = appState.allSeries.find((series) => series.name === titleName);
+  if (!matchedSeries) return [];
+  return normalizeEpisodes(matchedSeries.episodes);
 }
 
 function getTagMultiSelectHtml(fieldName, tags, selectedTags = []) {
