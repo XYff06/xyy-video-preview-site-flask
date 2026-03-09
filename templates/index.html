@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>视频预览网站</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="app" id="app"></main>
+    <template id="home-template">
+      <section class="home-page">
+        <header class="top-categories" id="category-list"></header>
+        <section class="poster-grid" id="series-grid"></section>
+      </section>
+    </template>
+
+    <template id="detail-template">
+      <section class="detail-page">
+        <section class="player-wrap">
+          <video id="player" controls preload="metadata"></video>
+          <div class="episode-switcher">
+            <button type="button" class="episode-nav" id="episode-prev" aria-label="上一页">◀</button>
+            <div class="episode-row" id="episode-row"></div>
+            <button type="button" class="episode-nav" id="episode-next" aria-label="下一页">▶</button>
+          </div>
+          <p id="player-meta"></p>
+        </section>
+      </section>
+    </template>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
