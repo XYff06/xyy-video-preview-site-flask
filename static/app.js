@@ -1,44 +1,63 @@
-// 统一的时间格式化方法：用于首页卡片、详情页元信息等所有时间展示。
+/**
+ * 统一格式化日期时间字符串。
+ *
+ * @param {string|number|Date} iso - 可被 Date 解析的时间值。
+ * @returns {string} 以 zh-CN 规则输出的 24 小时制时间文本。
+ */
 const formatDateTime = (iso) => new Date(iso).toLocaleString('zh-CN', { hour12: false });
 
-// 全局页面状态容器：集中管理首页、详情页和管理弹窗的 UI 状态。
+/**
+ * 全局页面状态容器。
+ *
+ * 说明：集中管理首页、详情页与管理弹窗的 UI 状态，避免散落的全局变量。
+ */
 const appState = {
-  allSeries: [], // 全量漫剧数据（含剧集），作为首页与详情页的基础数据源。
-  allTags: [], // 后端标签接口返回的标签全集；用于管理弹窗和首页分类导航。
-  selectedTag: null, // 当前首页选中的标签筛选项，null 表示“全部”。
-  searchQuery: '', // 首页全局搜索关键词。
-  sortBy: 'updated_desc', // 首页排序方式（如更新时间倒序/名称顺序等）。
+  allSeries: [], // 全量漫剧数据（含剧集列表）。
+  allTags: [], // 标签全集（来自后端 /api/tags）。
+  selectedTag: null, // 首页当前选中的标签，null 表示“全部”。
+  searchQuery: '', // 首页搜索关键字。
+  sortBy: 'updated_desc', // 首页排序方式。
   currentPage: 1, // 首页当前页码。
   pageSize: 25, // 首页每页条数。
-  homeSeries: [], // 当前筛选条件下，本页要渲染的漫剧列表。
-  homeTotal: 0, // 当前筛选条件下的总条数，用于分页计算。
-  homeLoading: false, // 首页列表加载中状态。
-  homeError: null, // 首页列表加载失败信息。
-  selectedEpisode: null, // 详情页当前选中的集号。
-  episodePage: 1, // 详情页“剧集标签”的当前分页页码。
-  episodePageSize: 10, // 详情页每页展示多少个剧集标签。
-  detailSeriesName: '', // 当前详情页对应的漫剧名，用于切换漫剧时重置剧集分页。
-  tagExpanded: false, // 首页标签栏是否展开“更多标签”。
-  loading: true, // 全站首屏初始化加载状态（拉取漫剧与标签时使用）。
-  error: null, // 全站首屏初始化失败信息。
-  activeAdminTab: 'tag', // 管理弹窗当前主 Tab：tag/title/episode。
-  adminModalOpen: false, // 管理弹窗是否打开。
-  flashMessage: '', // 顶部闪现提示文案（成功/失败反馈）。
-  flashAutoCloseTimeout: null, // 闪现提示自动关闭的定时器句柄。
-  flashVersion: 0, // 闪现提示版本号：每次设置新消息都递增，避免重复计时。
-  flashVersionRendered: 0, // 已渲染过的闪现提示版本号。
-  activeTagAction: 'create', // 标签管理子 Tab：create/rename/delete。
-  activeTitleAction: 'create', // 漫剧管理子 Tab：create/rename/delete。
-  activeEpisodeAction: 'create' // 剧集管理子 Tab：create/batch/rename/delete。
+  homeSeries: [], // 当前筛选条件下的首页列表数据。
+  homeTotal: 0, // 当前筛选条件下的总条数。
+  homeLoading: false, // 首页列表加载状态。
+  homeError: null, // 首页列表错误信息。
+  selectedEpisode: null, // 详情页当前选中的剧集集号。
+  episodePage: 1, // 详情页剧集标签分页的当前页。
+  episodePageSize: 10, // 详情页剧集标签分页大小。
+  detailSeriesName: '', // 当前详情页绑定的漫剧名称。
+  tagExpanded: false, // 首页标签栏是否展开更多项。
+  loading: true, // 首屏初始化加载状态。
+  error: null, // 首屏初始化错误信息。
+  activeAdminTab: 'tag', // 管理弹窗当前主 Tab（tag/title/episode）。
+  adminModalOpen: false, // 管理弹窗开关状态。
+  flashMessage: '', // 顶部闪现提示文案。
+  flashAutoCloseTimeout: null, // 闪现提示自动关闭定时器句柄。
+  flashVersion: 0, // 闪现提示版本号（用于控制重复计时）。
+  flashVersionRendered: 0, // 已渲染的闪现提示版本号。
+  activeTagAction: 'create', // 标签管理子动作（create/rename/delete）。
+  activeTitleAction: 'create', // 漫剧管理子动作（create/rename/delete）。
+  activeEpisodeAction: 'create' // 剧集管理子动作（create/batch/rename/delete）。
 };
 
-// 获取当前路由中的漫剧名（URL Path 去掉开头斜杠并解码）。
+/**
+ * 读取当前 URL Path 对应的漫剧名。
+ *
+ * @returns {string} 解码后的 Path 名称；首页时返回空字符串。
+ */
 function getCurrentPathName() {
   return decodeURIComponent(location.pathname.slice(1));
 }
 
+/**
+ * 发起 JSON API 请求，并统一处理错误响应。
+ *
+ * @param {string} url - 请求地址。
+ * @param {RequestInit} [options={}] - fetch 配置项。
+ * @returns {Promise<any>} 解析后的 JSON 数据。
+ */
 async function requestJsonApi(url, options = {}) {
-  // 统一处理 JSON 请求与错误抛出，避免每个请求都重复判断 response.ok。
   const response = await fetch(url, {
     headers: { 'Content-Type': 'application/json' },
     ...options
@@ -50,12 +69,17 @@ async function requestJsonApi(url, options = {}) {
   return payload;
 }
 
-// 仅加载标签数据，供首页分类和管理表单复用。
+/**
+ * 加载标签全集，供首页筛选与管理表单复用。
+ */
 async function loadTags() {
   const payload = await requestJsonApi('/api/tags');
   appState.allTags = payload.data;
 }
 
+/**
+ * 初始化加载首页基础数据（漫剧 + 标签），并触发首屏渲染。
+ */
 async function loadSeries() {
   // 初始化加载：拉取漫剧和标签后，完成数据规范化并触发首屏渲染。
   try {
@@ -82,8 +106,10 @@ async function loadSeries() {
   }
 }
 
+/**
+ * 按当前筛选、搜索、排序和分页条件加载首页列表。
+ */
 async function loadHomeSeries() {
-  // 首页列表加载：根据筛选、搜索、排序与分页参数刷新当前列表。
   appState.homeLoading = true;
   appState.homeError = null;
   render();
@@ -115,13 +141,24 @@ async function loadHomeSeries() {
   render();
 }
 
-// 获取标签列表：优先使用后端标签全集，兜底从漫剧数据中反推。
+/**
+ * 获取标签列表。
+ * 优先使用后端标签全集，缺失时从漫剧数据反推。
+ *
+ * @returns {string[]} 排序后的标签列表。
+ */
 function getAllTags() {
   if (appState.allTags.length) return [...appState.allTags];
   return [...new Set(appState.allSeries.flatMap((item) => [...item.tags]))].sort((a, b) => a.localeCompare(b, 'zh-CN'));
 }
 
 
+/**
+ * 转义 HTML 特殊字符，防止字符串注入到模板时破坏 DOM 结构。
+ *
+ * @param {any} value - 待转义的值。
+ * @returns {string} 安全的 HTML 文本。
+ */
 function escapeHtml(value) {
   return String(value)
     .replace(/&/g, '&amp;')
@@ -131,7 +168,12 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
-// 规范化剧集：同一集号只保留“更新时间最新”的一条，并按集号升序。
+/**
+ * 规范化剧集列表：同一集号仅保留更新时间最新的记录。
+ *
+ * @param {Array<Object>} episodes - 原始剧集列表。
+ * @returns {Array<Object>} 规范化后并按集号升序的剧集列表。
+ */
 function normalizeEpisodes(episodes) {
   const latestEpisodeByNumber = new Map();
 
@@ -155,7 +197,12 @@ function normalizeEpisodes(episodes) {
   return [...latestEpisodeByNumber.values()].sort((a, b) => a.episode - b.episode);
 }
 
-// 根据漫剧名生成剧集下拉选项（用于“修改/删除剧集”等管理表单）。
+/**
+ * 根据漫剧名称获取对应的剧集选项。
+ *
+ * @param {string} titleName - 漫剧名称。
+ * @returns {Array<Object>} 可用于下拉框的剧集列表。
+ */
 function getEpisodeOptionsByTitle(titleName) {
   const matchedSeries = appState.allSeries.find((series) => series.name === titleName);
   if (!matchedSeries) return [];
