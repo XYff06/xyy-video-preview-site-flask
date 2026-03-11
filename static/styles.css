@@ -53,26 +53,50 @@ body {
     min-height: 100vh;
 }
 
+/*
+ * 左右两侧栏的通用内层容器
+ * min-width: 0 - 允许网格子项在空间不足时继续收缩，避免内容把父布局撑宽
+ * padding: 22px 10px 40px - 设置内边距，上22px、左右10px、下40px
+ */
 .side-rail {
     min-width: 0;
     padding: 22px 10px 40px;
 }
 
+/*
+ * 左侧栏布局
+ * display: flex - 使用弹性布局，便于控制内部元素对齐方式
+ * justify-content: center - 让左侧栏中的内容在水平方向居中
+ */
 .left-rail {
     display: flex;
     justify-content: center;
 }
 
+/*
+ * 右侧栏布局
+ * display: flex - 使用弹性布局，便于控制内部元素对齐方式
+ * justify-content: center - 让右侧栏中的内容在水平方向居中
+ */
 .right-rail {
     display: flex;
     justify-content: center;
 }
 
+/*
+ * 中间主内容区容器
+ * min-width: 0 - 允许内容区在网格布局中正常收缩，避免内容溢出把整体撑宽
+ * padding: 22px 16px 40px - 设置内边距，上22px、左右16px、下40px
+ */
 .content-shell {
     min-width: 0;
     padding: 22px 16px 40px;
 }
 
+/*
+ * 顶部左侧区域容器
+ * width: 100% - 宽度占满父容器，方便内部元素按整行宽度布局
+ */
 #top-row-left {
     width: 100%;
 }
