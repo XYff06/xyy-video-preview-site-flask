@@ -359,6 +359,23 @@ def parse_directory_links(html: str, directory_url: str):
     return list(unique.values())
 
 
+def parse_episode_urls(video_urls: list[str]):
+    files = []
+    for video_url in video_urls:
+        pathname = unquote(urlparse(video_url).path)
+        filename = pathname.split('/')[-1] if pathname else ''
+        episode_no = extract_episode_no_by_text(filename) or extract_episode_no_by_text(pathname)
+        if not episode_no:
+            continue
+        files.append({'episodeNo': episode_no, 'videoUrl': video_url, 'filename': filename})
+
+    files.sort(key=lambda item: (item['episodeNo'], item['videoUrl']))
+    unique = {}
+    for item in files:
+        unique.setdefault(item['episodeNo'], item)
+    return list(unique.values())
+
+
 def query_series(tag=None, name=None, search=None, sort=None, page=1, page_size=25):
     filters = []
     values = []
@@ -567,7 +584,10 @@ def api_titles_post():
         return json_response(400, message='name 和 poster 不能为空')
 
     name = body['name'].strip()
-    poster = body['poster'].strip()
+    try:
+        poster = normalize_resource_value(body['poster'], 'posters')
+    except ValueError as exc:
+        return json_response(400, message=str(exc))
     tags = [tag.strip() for tag in body.get('tags', []) if validate_non_empty_string(tag)]
 
     try:
@@ -587,7 +607,10 @@ def api_titles_patch(title_name):
         return json_response(400, message='newName、poster、tags 参数不完整')
 
     new_name = body['newName'].strip()
-    poster = body['poster'].strip()
+    try:
+        poster = normalize_resource_value(body['poster'], 'posters')
+    except ValueError as exc:
+        return json_response(400, message=str(exc))
     tags = [tag.strip() for tag in body['tags'] if validate_non_empty_string(tag)]
     if not tags:
         return json_response(400, message='tags 至少需要一个标签')
@@ -628,20 +651,26 @@ def api_episodes_batch_directory():
     if not tags:
         return json_response(400, message='tags 至少需要一个标签')
 
-    parsed = urlparse(directory_url)
-    if parsed.scheme not in {'http', 'https'}:
-        return json_response(400, message='directoryUrl 只支持 http/https')
-    if not parsed.netloc:
-        return json_response(400, message='directoryUrl 不是合法 URL')
+    try:
+        poster = normalize_resource_value(poster, f'episodes/{name}/poster')
+        normalized_directory = normalize_resource_value(directory_url, f'episodes/{name}/directory')
+    except ValueError as exc:
+        return json_response(400, message=str(exc))
+    if isinstance(normalized_directory, list):
+        parsed_episodes = parse_episode_urls(normalized_directory)
+    else:
+        parsed = urlparse(normalized_directory)
+        if parsed.scheme not in {'http', 'https'} or not parsed.netloc:
+            return json_response(400, message='directoryUrl 不是合法 URL')
 
-    response = requests.get(directory_url, timeout=20)
-    if response.status_code >= 400:
-        return json_response(400, message=f'读取目录失败：HTTP {response.status_code}')
-    content_type = response.headers.get('content-type', '')
-    if not re.search(r'text/html|application/xhtml\+xml', content_type, re.I):
-        return json_response(400, message='目录地址返回的不是 HTML 页面，无法解析视频列表')
+        response = requests.get(normalized_directory, timeout=20)
+        if response.status_code >= 400:
+            return json_response(400, message=f'读取目录失败：HTTP {response.status_code}')
+        content_type = response.headers.get('content-type', '')
+        if not re.search(r'text/html|application/xhtml\+xml', content_type, re.I):
+            return json_response(400, message='目录地址返回的不是 HTML 页面，无法解析视频列表')
 
-    parsed_episodes = parse_directory_links(response.text, directory_url)
+        parsed_episodes = parse_directory_links(response.text, normalized_directory)
     if not parsed_episodes:
         return json_response(400, message='目录中未识别到可导入的视频文件。请确认链接可直接访问且文件名包含集号（如第1集/第一集/EP01）。')
 
@@ -714,10 +743,17 @@ def api_episodes_post():
         episode_no = int(body.get('episodeNo'))
     except (TypeError, ValueError):
         episode_no = None
-    video_url = str(body.get('videoUrl') or '').strip()
+    raw_video_url = str(body.get('videoUrl') or '').strip()
 
-    if not title_name or episode_no is None or not video_url:
+    if not title_name or episode_no is None or not raw_video_url:
         return json_response(400, message='参数不完整')
+    try:
+        video_url = normalize_resource_value(raw_video_url, f'episodes/{title_name}')
+    except ValueError as exc:
+        return json_response(400, message=str(exc))
+    if isinstance(video_url, list):
+        return json_response(400, message='videoUrl 必须是单个视频资源地址，不能是目录')
+
     if episode_no <= 0:
         return json_response(400, message='集号必须大于0')
 
@@ -737,7 +773,7 @@ def api_episodes_post():
 def api_episodes_patch():
     body = request.get_json(silent=True) or {}
     title_name = str(body.get('titleName') or '').strip()
-    video_url = str(body.get('videoUrl') or '').strip()
+    raw_video_url = str(body.get('videoUrl') or '').strip()
     try:
         source_no = int(body.get('episodeNo'))
         target_no = int(body.get('newEpisodeNo'))
@@ -745,8 +781,14 @@ def api_episodes_patch():
         source_no = None
         target_no = None
 
-    if not title_name or source_no is None or target_no is None or not video_url:
+    if not title_name or source_no is None or target_no is None or not raw_video_url:
         return json_response(400, message='参数不完整')
+    try:
+        video_url = normalize_resource_value(raw_video_url, f'episodes/{title_name}')
+    except ValueError as exc:
+        return json_response(400, message=str(exc))
+    if isinstance(video_url, list):
+        return json_response(400, message='videoUrl 必须是单个视频资源地址，不能是目录')
     if source_no <= 0 or target_no <= 0:
         return json_response(400, message='集号必须大于0')
 
