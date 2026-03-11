@@ -1,16 +1,18 @@
 import os
 import re
+import time
 from contextlib import contextmanager
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import unquote, urljoin, urlparse
 
+import psycopg
 import requests
+import tos
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request
-import psycopg
-from psycopg.rows import dict_row
 from psycopg.errors import UniqueViolation
+from psycopg.rows import dict_row
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / '.env')
@@ -89,6 +91,114 @@ def validate_non_empty_string(value) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
 
+def is_http_url(value: str) -> bool:
+    parsed = urlparse(value)
+    return parsed.scheme in {'http', 'https'} and bool(parsed.netloc)
+
+
+def build_oss_bucket():
+    access_key = optional_env('OSS_ACCESS_KEY')
+    secret_key = optional_env('OSS_SECRET_KEY')
+    endpoint = optional_env('OSS_ENDPOINT')
+    region = optional_env('OSS_REGION')
+    bucket_name = optional_env('OSS_BUCKET_NAME')
+
+    missing = [
+        name
+        for name, current in (
+            ('OSS_ACCESS_KEY', access_key),
+            ('OSS_SECRET_KEY', secret_key),
+            ('OSS_ENDPOINT', endpoint),
+            ('OSS_REGION', region),
+            ('OSS_BUCKET_NAME', bucket_name),
+        )
+        if not current
+    ]
+    if missing:
+        raise ValueError(f'缺少OSS配置: {", ".join(missing)}')
+
+    return access_key, secret_key, endpoint, region, bucket_name
+
+
+def append_timestamp_to_filename(path_obj: Path) -> str:
+    suffixes = ''.join(path_obj.suffixes)
+    timestamp = int(time.time() * 1000)
+
+    if suffixes:
+        base_name = path_obj.name[:-len(suffixes)]
+        return f'{base_name}_{timestamp}{suffixes}'
+
+    return f'{path_obj.name}_{timestamp}'
+
+
+def normalize_resource_value(value: str, name: str):
+    normalized = value.strip()
+    if is_http_url(normalized):
+        return normalized
+
+    access_key, secret_key, endpoint, region, bucket_name = build_oss_bucket()
+    access_key = (access_key or "").strip()
+    secret_key = (secret_key or "").strip()
+    endpoint = (endpoint or "").strip()
+    region = (region or "").strip()
+    bucket_name = (bucket_name or "").strip()
+
+    if not access_key:
+        raise ValueError("access_key 不能为空")
+    if not secret_key:
+        raise ValueError("secret_key 不能为空")
+    if not endpoint:
+        raise ValueError("endpoint 不能为空")
+    if not region:
+        raise ValueError("region 不能为空")
+    if not bucket_name:
+        raise ValueError("bucket_name 不能为空")
+
+    try:
+        path_obj = Path(normalized).expanduser().resolve(strict=True)
+    except FileNotFoundError:
+        raise ValueError('本地路径不存在')
+    except Exception as e:
+        raise ValueError(f'路径解析失败: {e}')
+
+    client = tos.TosClientV2(access_key, secret_key, endpoint, region)
+
+    if path_obj.is_file():
+        filename_with_ts = append_timestamp_to_filename(path_obj)
+        key = f'{name}/{filename_with_ts}'
+        resp = client.put_object_from_file(bucket_name, key, str(path_obj))
+        if getattr(resp, 'status_code', None) != 200:
+            raise ValueError(f'上传失败, status_code={getattr(resp, "status_code", "unknown")}')
+        return f'https://{bucket_name}.{endpoint}/{key}'
+
+    if path_obj.is_dir():
+        url_list = []
+        for file_path in sorted(path_obj.rglob('*')):
+            if not file_path.is_file():
+                continue
+
+            relative_path = file_path.relative_to(path_obj)
+            parent_dir = relative_path.parent.as_posix()
+            filename_with_ts = append_timestamp_to_filename(file_path)
+
+            if parent_dir and parent_dir != '.':
+                key = f'{name}/{parent_dir}/{filename_with_ts}'
+            else:
+                key = f'{name}/{filename_with_ts}'
+
+            resp = client.put_object_from_file(bucket_name, key, str(file_path))
+            if getattr(resp, 'status_code', None) != 200:
+                raise ValueError(f'上传失败: {file_path}, status_code={getattr(resp, "status_code", "unknown")}')
+
+            url_list.append(f'https://{bucket_name}.{endpoint}/{key}')
+
+        if not url_list:
+            raise ValueError('目录为空，或目录下没有可上传文件')
+
+        return url_list
+
+    raise ValueError('输入路径既不是文件也不是目录')
+
 
 def parse_positive_int(value, default: int, max_value: int | None = None) -> int:
     try:
@@ -102,14 +212,12 @@ def parse_positive_int(value, default: int, max_value: int | None = None) -> int
     return parsed
 
 
-
 def to_iso(value):
     if value is None:
         return None
     if isinstance(value, datetime):
         return value.isoformat()
     return value
-
 
 
 def serialize_episode_row(row):
@@ -119,7 +227,6 @@ def serialize_episode_row(row):
         'updatedAt': to_iso(row['updatedAt']),
         'videoUrl': row['videoUrl'],
     }
-
 
 
 def serialize_series_row(row):
@@ -144,7 +251,6 @@ def serialize_series_row(row):
     }
 
 
-
 def assign_title_tags(conn: psycopg.Connection, title_id: int, tags: list[str]):
     with conn.cursor() as cur:
         cur.execute('DELETE FROM title_tag WHERE title_id = %s', (title_id,))
@@ -155,12 +261,10 @@ def assign_title_tags(conn: psycopg.Connection, title_id: int, tags: list[str]):
             INSERT INTO title_tag(title_id, tag_id)
             SELECT %s, tag.id
             FROM tag
-            WHERE tag.tag_name = ANY(%s)
-            ON CONFLICT DO NOTHING
+            WHERE tag.tag_name = ANY (%s) ON CONFLICT DO NOTHING
             ''',
             (title_id, tags),
         )
-
 
 
 def resolve_sort(sort: str | None) -> str:
@@ -173,7 +277,6 @@ def resolve_sort(sort: str | None) -> str:
         'name_desc': 't.name DESC',
     }
     return sort_map.get(sort or '', sort_map['updated_desc'])
-
 
 
 def parse_chinese_number(raw: str | None):
@@ -203,7 +306,6 @@ def parse_chinese_number(raw: str | None):
     return total + current
 
 
-
 def extract_episode_no_by_text(raw_text: str | None):
     text = str(raw_text or '')
     strict_patterns = [
@@ -225,7 +327,6 @@ def extract_episode_no_by_text(raw_text: str | None):
         return None
     value = int(fallback.group(1))
     return value if value > 0 else None
-
 
 
 def parse_directory_links(html: str, directory_url: str):
@@ -256,7 +357,6 @@ def parse_directory_links(html: str, directory_url: str):
     for item in files:
         unique.setdefault(item['episodeNo'], item)
     return list(unique.values())
-
 
 
 def query_series(tag=None, name=None, search=None, sort=None, page=1, page_size=25):
@@ -348,26 +448,24 @@ def query_series(tag=None, name=None, search=None, sort=None, page=1, page_size=
     }
 
 
-
 def get_flat_ingest_records():
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             '''
-            SELECT
-              t.name,
-              e.episode_no AS episode,
-              t.cover_url AS poster,
-              e.episode_url AS "videoUrl",
-              e.first_ingested_at AS "firstIngestedAt",
-              e.updated_at AS "updatedAt",
-              COALESCE(
-                ARRAY_AGG(g.tag_name ORDER BY g.sort_no, g.tag_name) FILTER (WHERE g.tag_name IS NOT NULL),
-                ARRAY[]::text[]
-              ) AS tags
+            SELECT t.name,
+                   e.episode_no        AS episode,
+                   t.cover_url         AS poster,
+                   e.episode_url       AS "videoUrl",
+                   e.first_ingested_at AS "firstIngestedAt",
+                   e.updated_at        AS "updatedAt",
+                   COALESCE(
+                           ARRAY_AGG(g.tag_name ORDER BY g.sort_no, g.tag_name) FILTER(WHERE g.tag_name IS NOT NULL),
+                           ARRAY[] ::text[]
+                   )                   AS tags
             FROM title t
-            JOIN episode e ON e.title_id = t.id
-            LEFT JOIN title_tag tt ON tt.title_id = t.id
-            LEFT JOIN tag g ON g.id = tt.tag_id
+                     JOIN episode e ON e.title_id = t.id
+                     LEFT JOIN title_tag tt ON tt.title_id = t.id
+                     LEFT JOIN tag g ON g.id = tt.tag_id
             GROUP BY t.id, e.id
             ORDER BY t.name, e.episode_no
             '''
@@ -569,29 +667,26 @@ def api_episodes_batch_directory():
             episode_urls = [item['videoUrl'] for item in parsed_episodes]
             cur.execute(
                 '''
-                WITH input AS (
-                  SELECT *
-                  FROM UNNEST(%s::int[], %s::text[]) AS u(episode_no, episode_url)
-                ),
-                inserted AS (
-                  INSERT INTO episode(title_id, episode_no, episode_url)
-                  SELECT %s, i.episode_no, i.episode_url
-                  FROM input i
-                  ON CONFLICT (title_id, episode_no) DO NOTHING
+                WITH input AS (SELECT *
+                               FROM UNNEST(%s::int[], %s::text[]) AS u(episode_no, episode_url)),
+                     inserted AS (
+                INSERT
+                INTO episode(title_id, episode_no, episode_url)
+                SELECT %s, i.episode_no, i.episode_url
+                FROM input i ON CONFLICT (title_id, episode_no) DO NOTHING
                   RETURNING episode_no
                 ),
                 updated AS (
-                  UPDATE episode e
-                  SET episode_url = i.episode_url
-                  FROM input i
-                  WHERE e.title_id = %s
-                    AND e.episode_no = i.episode_no
-                    AND NOT EXISTS (SELECT 1 FROM inserted ins WHERE ins.episode_no = i.episode_no)
-                  RETURNING e.episode_no
-                )
-                SELECT
-                  (SELECT COUNT(*)::int FROM inserted) AS inserted,
-                  (SELECT COUNT(*)::int FROM updated) AS updated
+                UPDATE episode e
+                SET episode_url = i.episode_url
+                FROM input i
+                WHERE e.title_id = %s
+                  AND e.episode_no = i.episode_no
+                  AND NOT EXISTS (SELECT 1 FROM inserted ins WHERE ins.episode_no = i.episode_no)
+                    RETURNING e.episode_no
+                    )
+                SELECT (SELECT COUNT(*) ::int FROM inserted) AS inserted,
+                       (SELECT COUNT(*) ::int FROM updated)  AS updated
                 ''',
                 (episode_nos, episode_urls, title_id, title_id),
             )
@@ -660,9 +755,11 @@ def api_episodes_patch():
             cur.execute(
                 '''
                 UPDATE episode e
-                SET episode_no = %s, episode_url = %s
-                FROM title t
-                WHERE e.title_id = t.id AND t.name = %s AND e.episode_no = %s
+                SET episode_no  = %s,
+                    episode_url = %s FROM title t
+                WHERE e.title_id = t.id
+                  AND t.name = %s
+                  AND e.episode_no = %s
                 ''',
                 (target_no, video_url, title_name, source_no),
             )
@@ -690,8 +787,11 @@ def api_episodes_delete():
     with get_tx() as conn, conn.cursor() as cur:
         cur.execute(
             '''
-            DELETE FROM episode e USING title t
-            WHERE e.title_id = t.id AND t.name = %s AND e.episode_no = %s
+            DELETE
+            FROM episode e USING title t
+            WHERE e.title_id = t.id
+              AND t.name = %s
+              AND e.episode_no = %s
             ''',
             (title_name, episode_no),
         )

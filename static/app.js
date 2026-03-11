@@ -44,7 +44,7 @@ const appState = {
 /**
  * 读取当前URL Path对应的漫剧名
  *
- * @returns {string} 解码后的 Path 名称；首页时返回空字符串
+ * @returns {string} 解码后的Path名称；首页时返回空字符串
  */
 function getCurrentPathName() {
   return decodeURIComponent(location.pathname.slice(1));
@@ -81,7 +81,7 @@ async function loadTags() {
  * 初始化加载首页基础数据(漫剧 + 标签)，并触发首屏渲染
  */
 async function loadSeries() {
-  // 初始化加载：拉取漫剧和标签后，完成数据规范化并触发首屏渲染
+  // 初始化加载: 拉取漫剧和标签后，完成数据规范化并触发首屏渲染
   try {
     const [seriesPayload] = await Promise.all([
       requestJsonApi('/api/series?page=1&pageSize=10000'),
@@ -169,7 +169,7 @@ function escapeHtml(value) {
 }
 
 /**
- * 规范化剧集列表：同一集号仅保留更新时间最新的记录
+ * 规范化剧集列表: 同一集号仅保留更新时间最新的记录
  *
  * @param {Array<Object>} episodes - 原始剧集列表
  * @returns {Array<Object>} 规范化后并按集号升序的剧集列表
