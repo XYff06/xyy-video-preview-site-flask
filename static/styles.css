@@ -36,7 +36,16 @@ body {
     padding: 0;
 }
 
-/* 三栏主布局：左标签栏 + 中内容区 + 右操作栏 */
+/*
+ * 三栏主布局容器
+ * display: grid - 使用CSS网格布局，方便把页面分成左中右三列
+ * grid-template-columns: clamp(120px, 9vw, 175px) minmax(0, 1fr) clamp(90px, 5vw, 120px)
+ *   - 第1列: 左侧栏宽度自适应，最小120px，理想值为视口宽度的9%，最大175px
+ *   - 第2列: 中间内容区占据剩余空间，最小可压缩到0，避免内容把布局撑坏
+ *   - 第3列: 右侧栏宽度自适应，最小90px，理想值为视口宽度的5%，最大120px
+ * width: 100% - 容器宽度占满父元素
+ * min-height: 100vh - 容器最小高度至少撑满整个浏览器可视区域
+ */
 .layout-shell {
     display: grid;
     grid-template-columns: clamp(120px, 9vw, 175px) minmax(0, 1fr) clamp(90px, 5vw, 120px);
