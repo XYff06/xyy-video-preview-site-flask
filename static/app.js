@@ -13,8 +13,8 @@ const formatDateTime = (iso) => new Date(iso).toLocaleString('zh-CN', { hour12: 
  */
 const appState = {
   allSeries: [], // 全量漫剧数据(含剧集列表)
-  allTags: [], // 标签全集(来自后端 /api/tags)
-  selectedTag: null, // 首页当前选中的标签，null 表示"全部"
+  allTags: [], // 标签全集(来自后端/api/tags)
+  selectedTag: null, // 首页当前选中的标签，null表示"全部"
   searchQuery: '', // 首页搜索关键字
   sortBy: 'updated_desc', // 首页排序方式
   currentPage: 1, // 首页当前页码
@@ -30,7 +30,7 @@ const appState = {
   tagExpanded: false, // 首页标签栏是否展开更多项
   loading: true, // 首屏初始化加载状态
   error: null, // 首屏初始化错误信息
-  activeAdminTab: 'tag', // 管理弹窗当前主 Tab(tag/title/episode)
+  activeAdminTab: 'tag', // 管理弹窗当前主Tab(tag/title/episode)
   adminModalOpen: false, // 管理弹窗开关状态
   flashMessage: '', // 顶部闪现提示文案
   flashAutoCloseTimeout: null, // 闪现提示自动关闭定时器句柄
@@ -42,7 +42,7 @@ const appState = {
 };
 
 /**
- * 读取当前 URL Path 对应的漫剧名
+ * 读取当前URL Path对应的漫剧名
  *
  * @returns {string} 解码后的 Path 名称；首页时返回空字符串
  */
@@ -797,7 +797,7 @@ function renderAdminPanel(container) {
         <section class="action-panel ${appState.activeTitleAction === 'create' ? '' : 'hidden'}">
           <form id="title-create-form" class="stack-form">
             <input name="name" required placeholder="漫剧名" />
-            <input name="poster" required placeholder="海报URL" />
+            <input name="poster" required placeholder="海报资源地址: 支持https://...或服务端本地绝对路径" />
             ${getTagMultiSelectHtml('tags', tags)}
             <p id="title-create-tags-error" class="field-error hidden" role="alert" aria-live="polite"></p>
             <button type="submit">新增</button>
@@ -811,7 +811,7 @@ function renderAdminPanel(container) {
               ${appState.allSeries.map((series) => `<option value="${series.name}">${series.name}</option>`).join('')}
             </select>
             <input name="newName" required placeholder="漫剧名" />
-            <input name="newPoster" required placeholder="海报URL" />
+            <input name="newPoster" required placeholder="海报资源地址: 支持https://...或服务端本地绝对路径" />
             ${getTagMultiSelectHtml('newTags', tags)}
             <button type="submit">修改</button>
           </form>
@@ -956,7 +956,7 @@ function renderAdminPanel(container) {
             ${appState.allSeries.map((series) => `<option value="${series.name}">${series.name}</option>`).join('')}
           </select>
           <input type="number" min="1" name="episodeNo" required placeholder="集号" />
-          <input name="videoUrl" required placeholder="播放URL" />
+          <input name="videoUrl" required placeholder="播放资源地址: 支持https://...或服务端本地绝对路径" />
           <button type="submit">新增</button>
         </form>
       </section>
@@ -964,8 +964,8 @@ function renderAdminPanel(container) {
       <section class="action-panel ${appState.activeEpisodeAction === 'batch' ? '' : 'hidden'}">
         <form id="episode-batch-form" class="stack-form">
           <input name="name" required placeholder="漫剧名" />
-          <input name="poster" required placeholder="海报URL" />
-          <input name="directoryUrl" required placeholder="视频目录URL，例如 http://localhost:7777/某个目录/" />
+          <input name="poster" required placeholder="海报资源地址: 支持https://...或服务端本地绝对路径" />
+          <input name="directoryUrl" required placeholder="视频目录资源地址: 支持https://...或服务端本地绝对路径" />
           ${getTagMultiSelectHtml('batchTags', getAllTags())}
           <p id="episode-batch-tags-error" class="field-error hidden" role="alert" aria-live="polite"></p>
           <p class="hint">会自动解析目录下视频链接并按文件名中的"第1集/第一集/EP01"等集号排序导入</p>
@@ -983,7 +983,7 @@ function renderAdminPanel(container) {
             <option value="">选择集号</option>
           </select>
           <input type="number" min="1" name="newEpisodeNo" required placeholder="新集号" />
-          <input name="videoUrl" required placeholder="新播放URL" />
+          <input name="videoUrl" required placeholder="新资源地址: 支持https://...或服务端本地绝对路径" />
           <button type="submit">修改</button>
         </form>
       </section>
