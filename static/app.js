@@ -1,17 +1,26 @@
 /**
+ * 前端单页应用入口。
+ *
+ * 职责说明：
+ * 1) 维护统一的 UI 状态树（uiState）。
+ * 2) 通过 REST API 与后端通信。
+ * 3) 渲染首页、详情页、管理弹窗并绑定交互事件。
+ */
+
+/**
  * 统一格式化日期时间字符串
  *
  * @param {string|number|Date} iso - 可被Date解析的时间值
  * @returns {string} 以zh-CN规则输出的24小时制时间文本
  */
-const formatDateTime = (iso) => new Date(iso).toLocaleString('zh-CN', { hour12: false });
+const formatDateTimeZhCN = (iso) => new Date(iso).toLocaleString('zh-CN', { hour12: false });
 
 /**
  * 全局页面状态容器
  *
  * 说明: 集中管理首页、详情页与管理弹窗的UI状态，避免散落的全局变量
  */
-const appState = {
+const uiState = {
   allSeries: [], // 全量漫剧数据(含剧集列表)
   allTags: [], // 标签全集(来自后端/api/tags)
   selectedTag: null, // 首页当前选中的标签，null表示"全部"
@@ -46,7 +55,7 @@ const appState = {
  *
  * @returns {string} 解码后的Path名称；首页时返回空字符串
  */
-function getCurrentPathName() {
+function getCurrentRouteSeriesName() {
   return decodeURIComponent(location.pathname.slice(1));
 }
 
@@ -57,7 +66,7 @@ function getCurrentPathName() {
  * @param {RequestInit} [options={}] - fetch 配置项
  * @returns {Promise<any>} 解析后的 JSON 数据
  */
-async function requestJsonApi(url, options = {}) {
+async function fetchJsonOrThrow(url, options = {}) {
   const response = await fetch(url, {
     headers: { 'Content-Type': 'application/json' },
     ...options
@@ -73,69 +82,69 @@ async function requestJsonApi(url, options = {}) {
  * 加载标签全集，供首页筛选与管理表单复用
  */
 async function loadTags() {
-  const payload = await requestJsonApi('/api/tags');
-  appState.allTags = payload.data;
+  const payload = await fetchJsonOrThrow('/api/tags');
+  uiState.allTags = payload.data;
 }
 
 /**
  * 初始化加载首页基础数据(漫剧 + 标签)，并触发首屏渲染
  */
-async function loadSeries() {
+async function bootstrapInitialSeriesData() {
   // 初始化加载: 拉取漫剧和标签后，完成数据规范化并触发首屏渲染
   try {
     const [seriesPayload] = await Promise.all([
-      requestJsonApi('/api/series?page=1&pageSize=10000'),
+      fetchJsonOrThrow('/api/series?page=1&pageSize=10000'),
       loadTags()
     ]);
-    appState.allSeries = seriesPayload.data.map((item) => ({
+    uiState.allSeries = seriesPayload.data.map((item) => ({
       ...item,
       tags: new Set(item.tags),
-      episodes: normalizeEpisodes(item.episodes || [])
+      episodes: buildCanonicalEpisodeList(item.episodes || [])
     }));
-    appState.loading = false;
-    appState.error = null;
+    uiState.loading = false;
+    uiState.error = null;
   } catch (error) {
-    appState.loading = false;
-    appState.error = error.message;
+    uiState.loading = false;
+    uiState.error = error.message;
   }
 
   render();
 
-  if (!getCurrentPathName()) {
-    await loadHomeSeries();
+  if (!getCurrentRouteSeriesName()) {
+    await loadHomePageSeriesData();
   }
 }
 
 /**
  * 按当前筛选、搜索、排序和分页条件加载首页列表
  */
-async function loadHomeSeries() {
-  appState.homeLoading = true;
-  appState.homeError = null;
+async function loadHomePageSeriesData() {
+  uiState.homeLoading = true;
+  uiState.homeError = null;
   render();
 
   const params = new URLSearchParams();
-  params.set('page', String(appState.currentPage));
-  params.set('pageSize', String(appState.pageSize));
-  if (appState.selectedTag) params.set('tag', appState.selectedTag);
-  if (appState.searchQuery.trim()) params.set('search', appState.searchQuery.trim());
-  params.set('sort', appState.sortBy);
+  params.set('page', String(uiState.currentPage));
+  params.set('pageSize', String(uiState.pageSize));
+  if (uiState.selectedTag) params.set('tag', uiState.selectedTag);
+  if (uiState.searchQuery.trim()) params.set('search', uiState.searchQuery.trim());
+  params.set('sort', uiState.sortBy);
 
   try {
-    const payload = await requestJsonApi(`/api/series?${params.toString()}`);
-    appState.homeSeries = payload.data.map((item) => ({
+    const payload = await fetchJsonOrThrow(`/api/series?${params.toString()}`);
+    uiState.homeSeries = payload.data.map((item) => ({
       ...item,
-      episodes: normalizeEpisodes(item.episodes || [])
+      episodes: buildCanonicalEpisodeList(item.episodes || [])
     }));
-    appState.homeTotal = payload.pagination?.total ?? payload.data.length;
-    appState.currentPage = payload.pagination?.page ?? appState.currentPage;
-    appState.homeLoading = false;
-    appState.homeError = null;
+    uiState.homeTotal = payload.pagination?.total ?? payload.data.length;
+    uiState.currentPage = payload.pagination?.page ?? uiState.currentPage;
+    uiState.homeLoading = false;
+    uiState.homeError = null;
   } catch (error) {
-    appState.homeSeries = [];
-    appState.homeTotal = 0;
-    appState.homeLoading = false;
-    appState.homeError = error.message;
+    uiState.homeSeries = [];
+    uiState.homeTotal = 0;
+    uiState.homeLoading = false;
+    uiState.homeError = error.message;
   }
 
   render();
@@ -147,9 +156,9 @@ async function loadHomeSeries() {
  *
  * @returns {string[]} 排序后的标签列表
  */
-function getAllTags() {
-  if (appState.allTags.length) return [...appState.allTags];
-  return [...new Set(appState.allSeries.flatMap((item) => [...item.tags]))].sort((a, b) => a.localeCompare(b, 'zh-CN'));
+function collectAvailableTags() {
+  if (uiState.allTags.length) return [...uiState.allTags];
+  return [...new Set(uiState.allSeries.flatMap((item) => [...item.tags]))].sort((a, b) => a.localeCompare(b, 'zh-CN'));
 }
 
 
@@ -174,7 +183,7 @@ function escapeHtml(value) {
  * @param {Array<Object>} episodes - 原始剧集列表
  * @returns {Array<Object>} 规范化后并按集号升序的剧集列表
  */
-function normalizeEpisodes(episodes) {
+function buildCanonicalEpisodeList(episodes) {
   const latestEpisodeByNumber = new Map();
 
   episodes.forEach((episode) => {
@@ -203,13 +212,20 @@ function normalizeEpisodes(episodes) {
  * @param {string} titleName - 漫剧名称
  * @returns {Array<Object>} 可用于下拉框的剧集列表
  */
-function getEpisodeOptionsByTitle(titleName) {
-  const matchedSeries = appState.allSeries.find((series) => series.name === titleName);
+function getEpisodeOptionsForSeries(titleName) {
+  const matchedSeries = uiState.allSeries.find((series) => series.name === titleName);
   if (!matchedSeries) return [];
-  return normalizeEpisodes(matchedSeries.episodes);
+  return buildCanonicalEpisodeList(matchedSeries.episodes);
 }
 
-function getTagMultiSelectHtml(fieldName, tags, selectedTags = []) {
+/**
+ * 渲染标签多选下拉 HTML。
+ *
+ * @param {string} fieldName - 表单字段名
+ * @param {string[]} tags - 可选标签列表
+ * @param {string[]} selectedTags - 已选标签
+ */
+function renderTagMultiSelectHtml(fieldName, tags, selectedTags = []) {
   if (!tags.length) {
     return '<div class="multi-select-empty">暂无可选标签</div>';
   }
@@ -234,7 +250,12 @@ function getTagMultiSelectHtml(fieldName, tags, selectedTags = []) {
   `;
 }
 
-function bindMultiSelectSummary(scope) {
+/**
+ * 绑定多选组件 summary 文案同步逻辑。
+ *
+ * @param {ParentNode} scope - 事件委托的作用域容器
+ */
+function bindMultiSelectSummaryEvents(scope) {
   scope.querySelectorAll('[data-multi-select]').forEach((multiSelect) => {
     const summary = multiSelect.querySelector('[data-multi-summary]');
     if (!summary) return;
@@ -254,53 +275,56 @@ function bindMultiSelectSummary(scope) {
   });
 }
 
-function fillEpisodeSelectByTitle(titleSelect, episodeSelect, placeholderText) {
-  const episodes = getEpisodeOptionsByTitle(titleSelect.value);
+/**
+ * 根据当前选中的漫剧，刷新集号下拉框。
+ */
+function fillEpisodeSelectForSeries(titleSelect, episodeSelect, placeholderText) {
+  const episodes = getEpisodeOptionsForSeries(titleSelect.value);
   episodeSelect.innerHTML = `<option value="">${placeholderText}</option>${episodes
     .map((episode) => `<option value="${episode.episode}">第${episode.episode}集</option>`)
     .join('')}`;
 }
 
-function setFieldError(errorNode, message = '') {
+function setFormFieldError(errorNode, message = '') {
   if (!errorNode) return;
   errorNode.textContent = message;
   errorNode.classList.toggle('hidden', !message);
 }
 
-function validateTagSelection(form, fieldName, errorNode, message) {
+function validateMultiTagSelection(form, fieldName, errorNode, message) {
   const checkboxes = [...form.querySelectorAll(`input[name="${fieldName}"]`)];
   if (checkboxes.length === 0) return false;
 
   const hasSelection = checkboxes.some((checkbox) => checkbox.checked);
-  setFieldError(errorNode, hasSelection ? '' : message);
+  setFormFieldError(errorNode, hasSelection ? '' : message);
   return hasSelection;
 }
 
-function getFlashHtml() {
-  if (!appState.flashMessage) return '';
+function renderFlashMessageHtml() {
+  if (!uiState.flashMessage) return '';
   return `
     <div class="flash-msg" role="status">
-      <span class="flash-text">${appState.flashMessage}</span>
+      <span class="flash-text">${uiState.flashMessage}</span>
       <button type="button" class="flash-close" id="flash-close-btn" aria-label="关闭提示">✕</button>
     </div>
   `;
 }
 
-function setFlashMessage(message) {
-  appState.flashMessage = message;
-  appState.flashVersion += 1;
+function showFlashMessage(message) {
+  uiState.flashMessage = message;
+  uiState.flashVersion += 1;
 }
 
-function clearFlashMessage() {
-  appState.flashMessage = '';
-  if (appState.flashAutoCloseTimeout) {
-    clearTimeout(appState.flashAutoCloseTimeout);
-    appState.flashAutoCloseTimeout = null;
+function hideFlashMessage() {
+  uiState.flashMessage = '';
+  if (uiState.flashAutoCloseTimeout) {
+    clearTimeout(uiState.flashAutoCloseTimeout);
+    uiState.flashAutoCloseTimeout = null;
   }
 }
 
-function getAdminModalHtml() {
-  if (!appState.adminModalOpen) return '';
+function renderAdminModalHtml() {
+  if (!uiState.adminModalOpen) return '';
   return `
     <div class="modal-mask" id="admin-modal-mask">
       <section class="admin-modal" role="dialog" aria-modal="true" aria-label="管理">
@@ -309,9 +333,9 @@ function getAdminModalHtml() {
           <button id="close-admin" class="icon-btn" type="button">✕</button>
         </header>
         <div class="admin-modal-tabs">
-          <button class="admin-nav-btn ${appState.activeAdminTab === 'tag' ? 'active' : ''}" data-admin-tab="tag">标签管理</button>
-          <button class="admin-nav-btn ${appState.activeAdminTab === 'title' ? 'active' : ''}" data-admin-tab="title">漫剧管理</button>
-          <button class="admin-nav-btn ${appState.activeAdminTab === 'episode' ? 'active' : ''}" data-admin-tab="episode">内容管理</button>
+          <button class="admin-nav-btn ${uiState.activeAdminTab === 'tag' ? 'active' : ''}" data-admin-tab="tag">标签管理</button>
+          <button class="admin-nav-btn ${uiState.activeAdminTab === 'title' ? 'active' : ''}" data-admin-tab="title">漫剧管理</button>
+          <button class="admin-nav-btn ${uiState.activeAdminTab === 'episode' ? 'active' : ''}" data-admin-tab="episode">内容管理</button>
         </div>
         <section id="admin-content"></section>
       </section>
@@ -319,16 +343,19 @@ function getAdminModalHtml() {
   `;
 }
 
+/**
+ * 顶层渲染函数：根据 URL 与 uiState 决定渲染首页/详情页及弹窗。
+ */
 function render() {
   const app = document.getElementById('app');
 
-  if (appState.loading) {
+  if (uiState.loading) {
     app.innerHTML = '<p>正在加载剧集数据...</p>';
     return;
   }
 
-  if (appState.error) {
-    app.innerHTML = `<p>加载失败：${appState.error}</p>`;
+  if (uiState.error) {
+    app.innerHTML = `<p>加载失败：${uiState.error}</p>`;
     return;
   }
 
@@ -338,54 +365,54 @@ function render() {
         <div id="top-row-left"></div>
       </aside>
       <section class="content-shell">
-        ${getFlashHtml()}
+        ${renderFlashMessageHtml()}
         <section id="page-content"></section>
       </section>
       <aside class="side-rail right-rail">
         <button id="open-admin" class="primary-btn manage-btn" type="button">管理</button>
       </aside>
     </section>
-    ${getAdminModalHtml()}
+    ${renderAdminModalHtml()}
   `;
 
   document.getElementById('open-admin').onclick = () => {
-    appState.adminModalOpen = true;
+    uiState.adminModalOpen = true;
     render();
   };
 
   const flashCloseBtn = document.getElementById('flash-close-btn');
-  if (appState.flashMessage && appState.flashVersionRendered !== appState.flashVersion) {
-    if (appState.flashAutoCloseTimeout) {
-      clearTimeout(appState.flashAutoCloseTimeout);
+  if (uiState.flashMessage && uiState.flashVersionRendered !== uiState.flashVersion) {
+    if (uiState.flashAutoCloseTimeout) {
+      clearTimeout(uiState.flashAutoCloseTimeout);
     }
-    appState.flashVersionRendered = appState.flashVersion;
-    appState.flashAutoCloseTimeout = setTimeout(() => {
-      clearFlashMessage();
+    uiState.flashVersionRendered = uiState.flashVersion;
+    uiState.flashAutoCloseTimeout = setTimeout(() => {
+      hideFlashMessage();
       render();
     }, 5000);
   }
   if (flashCloseBtn) {
     flashCloseBtn.onclick = () => {
-      clearFlashMessage();
+      hideFlashMessage();
       render();
     };
   }
 
-  if (appState.adminModalOpen) {
+  if (uiState.adminModalOpen) {
     document.getElementById('close-admin').onclick = () => {
-      appState.adminModalOpen = false;
+      uiState.adminModalOpen = false;
       render();
     };
 
     document.getElementById('admin-modal-mask').onclick = (event) => {
       if (event.target.id !== 'admin-modal-mask') return;
-      appState.adminModalOpen = false;
+      uiState.adminModalOpen = false;
       render();
     };
 
     document.querySelectorAll('[data-admin-tab]').forEach((btn) => {
       btn.onclick = () => {
-        appState.activeAdminTab = btn.dataset.adminTab;
+        uiState.activeAdminTab = btn.dataset.adminTab;
         render();
       };
     });
@@ -394,9 +421,9 @@ function render() {
   }
 
   const pageContent = document.getElementById('page-content');
-  const activeName = getCurrentPathName();
+  const activeName = getCurrentRouteSeriesName();
   if (activeName) {
-    const series = appState.allSeries.find((s) => s.name === activeName);
+    const series = uiState.allSeries.find((s) => s.name === activeName);
     if (series) {
       renderDetail(pageContent, series);
     } else {
@@ -420,51 +447,51 @@ function renderHome(container) {
   searchBar.className = 'home-search-bar';
   searchBar.innerHTML = `
     <form id="global-search-form" class="search-form">
-      <input id="global-search" class="global-search" type="search" placeholder="全局搜索：输入漫剧名称" value="${escapeHtml(appState.searchQuery)}" />
+      <input id="global-search" class="global-search" type="search" placeholder="全局搜索：输入漫剧名称" value="${escapeHtml(uiState.searchQuery)}" />
       <button type="submit" class="primary-btn search-btn">搜索</button>
       <select id="global-sort" class="global-sort" aria-label="排序依据">
-        <option value="updated_desc" ${appState.sortBy === 'updated_desc' ? 'selected' : ''}>最后更新时间(倒序)</option>
-        <option value="updated_asc" ${appState.sortBy === 'updated_asc' ? 'selected' : ''}>最后更新时间(顺序)</option>
-        <option value="ingested_asc" ${appState.sortBy === 'ingested_asc' ? 'selected' : ''}>最早入库时间(顺序)</option>
-        <option value="ingested_desc" ${appState.sortBy === 'ingested_desc' ? 'selected' : ''}>最早入库时间(倒序)</option>
-        <option value="name_asc" ${appState.sortBy === 'name_asc' ? 'selected' : ''}>名称(顺序)</option>
-        <option value="name_desc" ${appState.sortBy === 'name_desc' ? 'selected' : ''}>名称(倒序)</option>
+        <option value="updated_desc" ${uiState.sortBy === 'updated_desc' ? 'selected' : ''}>最后更新时间(倒序)</option>
+        <option value="updated_asc" ${uiState.sortBy === 'updated_asc' ? 'selected' : ''}>最后更新时间(顺序)</option>
+        <option value="ingested_asc" ${uiState.sortBy === 'ingested_asc' ? 'selected' : ''}>最早入库时间(顺序)</option>
+        <option value="ingested_desc" ${uiState.sortBy === 'ingested_desc' ? 'selected' : ''}>最早入库时间(倒序)</option>
+        <option value="name_asc" ${uiState.sortBy === 'name_asc' ? 'selected' : ''}>名称(顺序)</option>
+        <option value="name_desc" ${uiState.sortBy === 'name_desc' ? 'selected' : ''}>名称(倒序)</option>
       </select>
     </form>
   `;
   homePage.insertBefore(searchBar, grid);
 
-  const allTags = getAllTags();
-  const visibleTags = appState.tagExpanded ? allTags : allTags.slice(0, 5);
-  const selectedHiddenTag = !appState.tagExpanded && appState.selectedTag !== null && !visibleTags.includes(appState.selectedTag);
+  const allTags = collectAvailableTags();
+  const visibleTags = uiState.tagExpanded ? allTags : allTags.slice(0, 5);
+  const selectedHiddenTag = !uiState.tagExpanded && uiState.selectedTag !== null && !visibleTags.includes(uiState.selectedTag);
 
   const navItems = [
     { type: 'all', label: '全部' },
     ...visibleTags.map((tag) => ({ type: 'tag', label: tag })),
-    { type: 'more', label: appState.tagExpanded ? '收起' : '更多' }
+    { type: 'more', label: uiState.tagExpanded ? '收起' : '更多' }
   ];
 
   navItems.forEach((item) => {
     const btn = document.createElement('button');
     const isActive = item.type === 'all'
-      ? appState.selectedTag === null
+      ? uiState.selectedTag === null
       : item.type === 'tag'
-        ? appState.selectedTag === item.label
-        : appState.tagExpanded || selectedHiddenTag;
+        ? uiState.selectedTag === item.label
+        : uiState.tagExpanded || selectedHiddenTag;
 
     btn.className = `category-pill ${isActive ? 'active' : ''}`;
     btn.textContent = item.label;
 
     btn.onclick = () => {
       if (item.type === 'all') {
-        appState.selectedTag = null;
+        uiState.selectedTag = null;
       } else if (item.type === 'tag') {
-        appState.selectedTag = item.label;
+        uiState.selectedTag = item.label;
       } else {
-        appState.tagExpanded = !appState.tagExpanded;
+        uiState.tagExpanded = !uiState.tagExpanded;
       }
-      appState.currentPage = 1;
-      loadHomeSeries();
+      uiState.currentPage = 1;
+      loadHomePageSeriesData();
     };
     categoryList.appendChild(btn);
   });
@@ -474,28 +501,28 @@ function renderHome(container) {
   const sortSelect = document.getElementById('global-sort');
   searchForm.onsubmit = (event) => {
     event.preventDefault();
-    appState.searchQuery = searchInput.value;
-    appState.sortBy = sortSelect.value;
-    appState.currentPage = 1;
-    loadHomeSeries();
+    uiState.searchQuery = searchInput.value;
+    uiState.sortBy = sortSelect.value;
+    uiState.currentPage = 1;
+    loadHomePageSeriesData();
   };
 
   sortSelect.onchange = () => {
-    appState.sortBy = sortSelect.value;
-    appState.currentPage = 1;
-    loadHomeSeries();
+    uiState.sortBy = sortSelect.value;
+    uiState.currentPage = 1;
+    loadHomePageSeriesData();
   };
 
-  if (appState.homeError) {
-    grid.innerHTML = `<p class="empty-appState">加载失败：${appState.homeError}</p>`;
+  if (uiState.homeError) {
+    grid.innerHTML = `<p class="empty-uiState">加载失败：${uiState.homeError}</p>`;
   }
 
-  if (appState.homeLoading) {
-    grid.innerHTML = '<p class="empty-appState">正在加载列表...</p>';
+  if (uiState.homeLoading) {
+    grid.innerHTML = '<p class="empty-uiState">正在加载列表...</p>';
   }
 
-  const totalPages = Math.max(1, Math.ceil(appState.homeTotal / appState.pageSize));
-  const pageSeries = appState.homeSeries;
+  const totalPages = Math.max(1, Math.ceil(uiState.homeTotal / uiState.pageSize));
+  const pageSeries = uiState.homeSeries;
 
   pageSeries.forEach((series) => {
       const maxEpisode = Math.max(...series.episodes.map((ep) => Number(ep.episode) || 0), 0);
@@ -505,23 +532,23 @@ function renderHome(container) {
       card.innerHTML = `
         <div class="poster" style="background-image:url('${series.poster}')"></div>
         <p class="poster-title">${escapeHtml(series.name)}</p>
-        <p class="poster-meta">最大集数：${maxEpisode}<br>总集数：${totalEpisodes}<br>最后更新时间：<br>${escapeHtml(formatDateTime(series.updatedAt))}<br>入库时间：<br>${escapeHtml(formatDateTime(series.firstIngestedAt))}</p>
+        <p class="poster-meta">最大集数：${maxEpisode}<br>总集数：${totalEpisodes}<br>最后更新时间：<br>${escapeHtml(formatDateTimeZhCN(series.updatedAt))}<br>入库时间：<br>${escapeHtml(formatDateTimeZhCN(series.firstIngestedAt))}</p>
       `;
       card.onclick = () => {
         history.pushState({}, '', `/${encodeURIComponent(series.name)}`);
-        appState.selectedEpisode = series.episodes[0]?.episode ?? null;
+        uiState.selectedEpisode = series.episodes[0]?.episode ?? null;
         render();
       };
       grid.appendChild(card);
     });
 
   if (pageSeries.length === 0) {
-    grid.innerHTML = '<p class="empty-appState">没有匹配的漫剧</p>';
+    grid.innerHTML = '<p class="empty-uiState">没有匹配的漫剧</p>';
   }
 
   const buildPageList = () => {
     const pages = new Set([1, totalPages]);
-    for (let i = appState.currentPage - 2; i <= appState.currentPage + 2; i += 1) {
+    for (let i = uiState.currentPage - 2; i <= uiState.currentPage + 2; i += 1) {
       if (i >= 1 && i <= totalPages) pages.add(i);
     }
     return [...pages].sort((a, b) => a - b);
@@ -531,19 +558,19 @@ function renderHome(container) {
   const pagination = document.createElement('div');
   pagination.className = 'pagination';
   pagination.innerHTML = `
-    <button type="button" class="page-btn" data-page="prev" ${appState.currentPage === 1 ? 'disabled' : ''}>上一页</button>
+    <button type="button" class="page-btn" data-page="prev" ${uiState.currentPage === 1 ? 'disabled' : ''}>上一页</button>
     <div class="page-numbers">
       ${pageItems.map((pageNo, idx) => {
         const prev = pageItems[idx - 1];
         const ellipsis = prev && pageNo - prev > 1 ? '<span class="page-ellipsis">…</span>' : '';
-        return `${ellipsis}<button type="button" class="page-number-btn ${pageNo === appState.currentPage ? 'active' : ''}" data-page-no="${pageNo}">${pageNo}</button>`;
+        return `${ellipsis}<button type="button" class="page-number-btn ${pageNo === uiState.currentPage ? 'active' : ''}" data-page-no="${pageNo}">${pageNo}</button>`;
       }).join('')}
     </div>
-    <button type="button" class="page-btn" data-page="next" ${appState.currentPage === totalPages ? 'disabled' : ''}>下一页</button>
-    <span class="page-meta">第 ${appState.currentPage} / ${totalPages} 页(共 ${appState.homeTotal} 个)</span>
+    <button type="button" class="page-btn" data-page="next" ${uiState.currentPage === totalPages ? 'disabled' : ''}>下一页</button>
+    <span class="page-meta">第 ${uiState.currentPage} / ${totalPages} 页(共 ${uiState.homeTotal} 个)</span>
     <form class="page-jump-form" id="page-jump-form">
       <label for="page-jump-input">跳转</label>
-      <input id="page-jump-input" type="number" min="1" max="${totalPages}" value="${appState.currentPage}" />
+      <input id="page-jump-input" type="number" min="1" max="${totalPages}" value="${uiState.currentPage}" />
       <button type="submit" class="page-jump-btn">确定</button>
     </form>
   `;
@@ -551,22 +578,22 @@ function renderHome(container) {
   const prevBtn = pagination.querySelector('[data-page="prev"]');
   const nextBtn = pagination.querySelector('[data-page="next"]');
   prevBtn.onclick = () => {
-    if (appState.currentPage <= 1) return;
-    appState.currentPage -= 1;
-    loadHomeSeries();
+    if (uiState.currentPage <= 1) return;
+    uiState.currentPage -= 1;
+    loadHomePageSeriesData();
   };
   nextBtn.onclick = () => {
-    if (appState.currentPage >= totalPages) return;
-    appState.currentPage += 1;
-    loadHomeSeries();
+    if (uiState.currentPage >= totalPages) return;
+    uiState.currentPage += 1;
+    loadHomePageSeriesData();
   };
 
   pagination.querySelectorAll('[data-page-no]').forEach((btn) => {
     btn.onclick = () => {
       const pageNo = Number(btn.dataset.pageNo);
-      if (!Number.isFinite(pageNo) || pageNo === appState.currentPage) return;
-      appState.currentPage = pageNo;
-      loadHomeSeries();
+      if (!Number.isFinite(pageNo) || pageNo === uiState.currentPage) return;
+      uiState.currentPage = pageNo;
+      loadHomePageSeriesData();
     };
   });
 
@@ -577,25 +604,28 @@ function renderHome(container) {
     const nextPage = Number(input.value);
     if (!Number.isFinite(nextPage)) return;
     const safePage = Math.min(totalPages, Math.max(1, Math.floor(nextPage)));
-    if (safePage === appState.currentPage) return;
-    appState.currentPage = safePage;
-    loadHomeSeries();
+    if (safePage === uiState.currentPage) return;
+    uiState.currentPage = safePage;
+    loadHomePageSeriesData();
   };
 
   container.querySelector('.home-page').appendChild(pagination);
 }
 
+/**
+ * 渲染详情页（播放器 + 剧集分页切换 + 元数据）。
+ */
 function renderDetail(container, series) {
-  if (series.episodes.length > 0 && !series.episodes.some((ep) => ep.episode === appState.selectedEpisode)) {
-    appState.selectedEpisode = series.episodes[0].episode;
+  if (series.episodes.length > 0 && !series.episodes.some((ep) => ep.episode === uiState.selectedEpisode)) {
+    uiState.selectedEpisode = series.episodes[0].episode;
   }
 
-  if (appState.detailSeriesName !== series.name) {
-    const selectedIndex = series.episodes.findIndex((ep) => ep.episode === appState.selectedEpisode);
-    appState.episodePage = selectedIndex >= 0
-      ? Math.floor(selectedIndex / appState.episodePageSize) + 1
+  if (uiState.detailSeriesName !== series.name) {
+    const selectedIndex = series.episodes.findIndex((ep) => ep.episode === uiState.selectedEpisode);
+    uiState.episodePage = selectedIndex >= 0
+      ? Math.floor(selectedIndex / uiState.episodePageSize) + 1
       : 1;
-    appState.detailSeriesName = series.name;
+    uiState.detailSeriesName = series.name;
   }
 
   const topRowLeft = document.getElementById('top-row-left');
@@ -604,22 +634,22 @@ function renderDetail(container, series) {
 
   document.getElementById('back-home').onclick = () => {
     history.pushState({}, '', '/');
-    loadHomeSeries();
+    loadHomePageSeriesData();
   };
 
   const episodeRow = document.getElementById('episode-row');
-  const totalEpisodePages = Math.max(1, Math.ceil(series.episodes.length / appState.episodePageSize));
-  appState.episodePage = Math.min(totalEpisodePages, Math.max(1, appState.episodePage));
+  const totalEpisodePages = Math.max(1, Math.ceil(series.episodes.length / uiState.episodePageSize));
+  uiState.episodePage = Math.min(totalEpisodePages, Math.max(1, uiState.episodePage));
 
-  const pageStartIndex = (appState.episodePage - 1) * appState.episodePageSize;
-  const visibleEpisodes = series.episodes.slice(pageStartIndex, pageStartIndex + appState.episodePageSize);
+  const pageStartIndex = (uiState.episodePage - 1) * uiState.episodePageSize;
+  const visibleEpisodes = series.episodes.slice(pageStartIndex, pageStartIndex + uiState.episodePageSize);
 
   visibleEpisodes.forEach((ep) => {
     const tab = document.createElement('button');
-    tab.className = `episode-tab ${appState.selectedEpisode === ep.episode ? 'active' : ''}`;
+    tab.className = `episode-tab ${uiState.selectedEpisode === ep.episode ? 'active' : ''}`;
     tab.textContent = `第${ep.episode}集`;
     tab.onclick = () => {
-      appState.selectedEpisode = ep.episode;
+      uiState.selectedEpisode = ep.episode;
       render();
     };
     episodeRow.appendChild(tab);
@@ -627,22 +657,22 @@ function renderDetail(container, series) {
 
   const prevEpisodePageBtn = document.getElementById('episode-prev');
   const nextEpisodePageBtn = document.getElementById('episode-next');
-  prevEpisodePageBtn.disabled = appState.episodePage <= 1;
-  nextEpisodePageBtn.disabled = appState.episodePage >= totalEpisodePages;
+  prevEpisodePageBtn.disabled = uiState.episodePage <= 1;
+  nextEpisodePageBtn.disabled = uiState.episodePage >= totalEpisodePages;
 
   prevEpisodePageBtn.onclick = () => {
-    if (appState.episodePage <= 1) return;
-    appState.episodePage -= 1;
+    if (uiState.episodePage <= 1) return;
+    uiState.episodePage -= 1;
     render();
   };
 
   nextEpisodePageBtn.onclick = () => {
-    if (appState.episodePage >= totalEpisodePages) return;
-    appState.episodePage += 1;
+    if (uiState.episodePage >= totalEpisodePages) return;
+    uiState.episodePage += 1;
     render();
   };
 
-  const selected = series.episodes.find((e) => e.episode === appState.selectedEpisode) || series.episodes[0];
+  const selected = series.episodes.find((e) => e.episode === uiState.selectedEpisode) || series.episodes[0];
   const maxEpisode = series.episodes.reduce((max, ep) => Math.max(max, Number(ep.episode) || 0), 0);
   const totalEpisodes = series.episodes.length;
   const player = document.getElementById('player');
@@ -661,32 +691,35 @@ function renderDetail(container, series) {
   playerMeta.innerHTML = `
     <p class="player-meta-title">${escapeHtml(series.name)}</p>
     <p class="player-meta-time-row">
-      <span>首次入库：${escapeHtml(formatDateTime(selected.firstIngestedAt))}</span>
-      <span>最近更新：${escapeHtml(formatDateTime(selected.updatedAt))}</span>
+      <span>首次入库：${escapeHtml(formatDateTimeZhCN(selected.firstIngestedAt))}</span>
+      <span>最近更新：${escapeHtml(formatDateTimeZhCN(selected.updatedAt))}</span>
     </p>
     <p class="player-meta-url">${escapeHtml(selected.videoUrl)}</p>
   `;
 }
 
+/**
+ * 渲染管理面板（标签/漫剧/剧集三大管理分区）。
+ */
 function renderAdminPanel(container) {
-  if (appState.activeAdminTab === 'tag') {
-    const tags = getAllTags();
+  if (uiState.activeAdminTab === 'tag') {
+    const tags = collectAvailableTags();
     container.innerHTML = `
       <section class="admin-panel">
         <div class="action-tabs">
-          <button type="button" class="action-tab-btn ${appState.activeTagAction === 'create' ? 'active' : ''}" data-tag-action="create">新增标签</button>
-          <button type="button" class="action-tab-btn ${appState.activeTagAction === 'rename' ? 'active' : ''}" data-tag-action="rename">修改标签</button>
-          <button type="button" class="action-tab-btn ${appState.activeTagAction === 'delete' ? 'active' : ''}" data-tag-action="delete">删除标签</button>
+          <button type="button" class="action-tab-btn ${uiState.activeTagAction === 'create' ? 'active' : ''}" data-tag-action="create">新增标签</button>
+          <button type="button" class="action-tab-btn ${uiState.activeTagAction === 'rename' ? 'active' : ''}" data-tag-action="rename">修改标签</button>
+          <button type="button" class="action-tab-btn ${uiState.activeTagAction === 'delete' ? 'active' : ''}" data-tag-action="delete">删除标签</button>
         </div>
 
-        <section class="action-panel ${appState.activeTagAction === 'create' ? '' : 'hidden'}">
+        <section class="action-panel ${uiState.activeTagAction === 'create' ? '' : 'hidden'}">
           <form id="tag-create-form" class="inline-form">
             <input name="tagName" required placeholder="标签名" />
             <button type="submit">新增</button>
           </form>
         </section>
 
-        <section class="action-panel ${appState.activeTagAction === 'rename' ? '' : 'hidden'}">
+        <section class="action-panel ${uiState.activeTagAction === 'rename' ? '' : 'hidden'}">
           <form id="tag-rename-form" class="inline-form">
             <select name="tagName" required>
               <option value="">选择标签</option>
@@ -697,7 +730,7 @@ function renderAdminPanel(container) {
           </form>
         </section>
 
-        <section class="action-panel ${appState.activeTagAction === 'delete' ? '' : 'hidden'}">
+        <section class="action-panel ${uiState.activeTagAction === 'delete' ? '' : 'hidden'}">
           <form id="tag-delete-form" class="inline-form">
             <select name="tagName" required>
               <option value="">选择标签</option>
@@ -711,7 +744,7 @@ function renderAdminPanel(container) {
 
     document.querySelectorAll('[data-tag-action]').forEach((btn) => {
       btn.onclick = () => {
-        appState.activeTagAction = btn.dataset.tagAction;
+        uiState.activeTagAction = btn.dataset.tagAction;
         render();
       };
     });
@@ -723,11 +756,11 @@ function renderAdminPanel(container) {
         const formData = new FormData(event.target);
         const tagName = String(formData.get('tagName') || '').trim();
         try {
-          await requestJsonApi('/api/tags', { method: 'POST', body: JSON.stringify({ tagName }) });
-          setFlashMessage(`标签「${tagName}」已创建`);
-          await loadSeries();
+          await fetchJsonOrThrow('/api/tags', { method: 'POST', body: JSON.stringify({ tagName }) });
+          showFlashMessage(`标签「${tagName}」已创建`);
+          await bootstrapInitialSeriesData();
         } catch (error) {
-          setFlashMessage(error.message);
+          showFlashMessage(error.message);
           render();
         }
       };
@@ -750,12 +783,12 @@ function renderAdminPanel(container) {
         if (!tag || !newTagName || newTagName === tag) return;
 
         try {
-          await requestJsonApi(`/api/tags/${encodeURIComponent(tag)}`, { method: 'PATCH', body: JSON.stringify({ newTagName }) });
-          setFlashMessage('标签改名成功');
-          if (appState.selectedTag === tag) appState.selectedTag = newTagName;
-          await loadSeries();
+          await fetchJsonOrThrow(`/api/tags/${encodeURIComponent(tag)}`, { method: 'PATCH', body: JSON.stringify({ newTagName }) });
+          showFlashMessage('标签改名成功');
+          if (uiState.selectedTag === tag) uiState.selectedTag = newTagName;
+          await bootstrapInitialSeriesData();
         } catch (error) {
-          setFlashMessage(error.message);
+          showFlashMessage(error.message);
           render();
         }
       };
@@ -771,12 +804,12 @@ function renderAdminPanel(container) {
         if (!confirm(`确认删除标签"${tag}"？会从所有漫剧里移除该标签`)) return;
 
         try {
-          await requestJsonApi(`/api/tags/${encodeURIComponent(tag)}`, { method: 'DELETE' });
-          setFlashMessage('标签删除成功');
-          if (appState.selectedTag === tag) appState.selectedTag = null;
-          await loadSeries();
+          await fetchJsonOrThrow(`/api/tags/${encodeURIComponent(tag)}`, { method: 'DELETE' });
+          showFlashMessage('标签删除成功');
+          if (uiState.selectedTag === tag) uiState.selectedTag = null;
+          await bootstrapInitialSeriesData();
         } catch (error) {
-          setFlashMessage(error.message);
+          showFlashMessage(error.message);
           render();
         }
       };
@@ -784,44 +817,44 @@ function renderAdminPanel(container) {
     return;
   }
 
-  if (appState.activeAdminTab === 'title') {
-    const tags = getAllTags();
+  if (uiState.activeAdminTab === 'title') {
+    const tags = collectAvailableTags();
     container.innerHTML = `
       <section class="admin-panel">
         <div class="action-tabs">
-          <button type="button" class="action-tab-btn ${appState.activeTitleAction === 'create' ? 'active' : ''}" data-title-action="create">新增漫剧</button>
-          <button type="button" class="action-tab-btn ${appState.activeTitleAction === 'rename' ? 'active' : ''}" data-title-action="rename">修改漫剧</button>
-          <button type="button" class="action-tab-btn ${appState.activeTitleAction === 'delete' ? 'active' : ''}" data-title-action="delete">删除漫剧</button>
+          <button type="button" class="action-tab-btn ${uiState.activeTitleAction === 'create' ? 'active' : ''}" data-title-action="create">新增漫剧</button>
+          <button type="button" class="action-tab-btn ${uiState.activeTitleAction === 'rename' ? 'active' : ''}" data-title-action="rename">修改漫剧</button>
+          <button type="button" class="action-tab-btn ${uiState.activeTitleAction === 'delete' ? 'active' : ''}" data-title-action="delete">删除漫剧</button>
         </div>
 
-        <section class="action-panel ${appState.activeTitleAction === 'create' ? '' : 'hidden'}">
+        <section class="action-panel ${uiState.activeTitleAction === 'create' ? '' : 'hidden'}">
           <form id="title-create-form" class="stack-form">
             <input name="name" required placeholder="漫剧名" />
             <input name="poster" required placeholder="海报资源地址: 支持https://...或服务端本地绝对路径" />
-            ${getTagMultiSelectHtml('tags', tags)}
+            ${renderTagMultiSelectHtml('tags', tags)}
             <p id="title-create-tags-error" class="field-error hidden" role="alert" aria-live="polite"></p>
             <button type="submit">新增</button>
           </form>
         </section>
 
-        <section class="action-panel ${appState.activeTitleAction === 'rename' ? '' : 'hidden'}">
+        <section class="action-panel ${uiState.activeTitleAction === 'rename' ? '' : 'hidden'}">
           <form id="title-rename-form" class="stack-form">
             <select name="name" required>
               <option value="">选择漫剧</option>
-              ${appState.allSeries.map((series) => `<option value="${series.name}">${series.name}</option>`).join('')}
+              ${uiState.allSeries.map((series) => `<option value="${series.name}">${series.name}</option>`).join('')}
             </select>
             <input name="newName" required placeholder="漫剧名" />
             <input name="newPoster" required placeholder="海报资源地址: 支持https://...或服务端本地绝对路径" />
-            ${getTagMultiSelectHtml('newTags', tags)}
+            ${renderTagMultiSelectHtml('newTags', tags)}
             <button type="submit">修改</button>
           </form>
         </section>
 
-        <section class="action-panel ${appState.activeTitleAction === 'delete' ? '' : 'hidden'}">
+        <section class="action-panel ${uiState.activeTitleAction === 'delete' ? '' : 'hidden'}">
           <form id="title-delete-form" class="inline-form">
             <select name="name" required>
               <option value="">选择漫剧</option>
-              ${appState.allSeries.map((series) => `<option value="${series.name}">${series.name}</option>`).join('')}
+              ${uiState.allSeries.map((series) => `<option value="${series.name}">${series.name}</option>`).join('')}
             </select>
             <button type="submit">删除</button>
           </form>
@@ -831,19 +864,19 @@ function renderAdminPanel(container) {
 
     document.querySelectorAll('[data-title-action]').forEach((btn) => {
       btn.onclick = () => {
-        appState.activeTitleAction = btn.dataset.titleAction;
+        uiState.activeTitleAction = btn.dataset.titleAction;
         render();
       };
     });
 
-    bindMultiSelectSummary(container);
+    bindMultiSelectSummaryEvents(container);
 
     const titleCreateForm = document.getElementById('title-create-form');
     if (titleCreateForm) {
       const tagsErrorNode = titleCreateForm.querySelector('#title-create-tags-error');
       titleCreateForm.querySelectorAll('input[name="tags"]').forEach((checkbox) => {
         checkbox.onchange = () => {
-          validateTagSelection(titleCreateForm, 'tags', tagsErrorNode, '请至少选择一个标签');
+          validateMultiTagSelection(titleCreateForm, 'tags', tagsErrorNode, '请至少选择一个标签');
         };
       });
 
@@ -856,15 +889,15 @@ function renderAdminPanel(container) {
           .getAll('tags')
           .map((tag) => String(tag).trim())
           .filter(Boolean);
-        if (!validateTagSelection(event.target, 'tags', tagsErrorNode, '请至少选择一个标签')) {
+        if (!validateMultiTagSelection(event.target, 'tags', tagsErrorNode, '请至少选择一个标签')) {
           return;
         }
         try {
-          await requestJsonApi('/api/titles', { method: 'POST', body: JSON.stringify({ name, poster, tags: titleTags }) });
-          setFlashMessage(`漫剧「${name}」已创建`);
-          await loadSeries();
+          await fetchJsonOrThrow('/api/titles', { method: 'POST', body: JSON.stringify({ name, poster, tags: titleTags }) });
+          showFlashMessage(`漫剧「${name}」已创建`);
+          await bootstrapInitialSeriesData();
         } catch (error) {
-          setFlashMessage(error.message);
+          showFlashMessage(error.message);
           render();
         }
       };
@@ -877,14 +910,14 @@ function renderAdminPanel(container) {
       const newPosterInput = titleRenameForm.elements.namedItem('newPoster');
 
       const fillTitleEditFields = (titleName) => {
-        const targetSeries = appState.allSeries.find((series) => series.name === titleName);
+        const targetSeries = uiState.allSeries.find((series) => series.name === titleName);
         if (!targetSeries) return;
         newNameInput.value = targetSeries.name;
         newPosterInput.value = targetSeries.poster;
         titleRenameForm.querySelectorAll('input[name="newTags"]').forEach((checkbox) => {
           checkbox.checked = targetSeries.tags.has(checkbox.value);
         });
-        bindMultiSelectSummary(titleRenameForm);
+        bindMultiSelectSummaryEvents(titleRenameForm);
       };
 
       titleSelect.onchange = () => {
@@ -906,12 +939,12 @@ function renderAdminPanel(container) {
         if (!oldName || !newName || !newPoster || newTags.length === 0) return;
 
         try {
-          await requestJsonApi(`/api/titles/${encodeURIComponent(oldName)}`, { method: 'PATCH', body: JSON.stringify({ newName, poster: newPoster, tags: newTags }) });
-          setFlashMessage('漫剧信息修改成功');
-          if (getCurrentPathName() === oldName) history.replaceState({}, '', `/${encodeURIComponent(newName)}`);
-          await loadSeries();
+          await fetchJsonOrThrow(`/api/titles/${encodeURIComponent(oldName)}`, { method: 'PATCH', body: JSON.stringify({ newName, poster: newPoster, tags: newTags }) });
+          showFlashMessage('漫剧信息修改成功');
+          if (getCurrentRouteSeriesName() === oldName) history.replaceState({}, '', `/${encodeURIComponent(newName)}`);
+          await bootstrapInitialSeriesData();
         } catch (error) {
-          setFlashMessage(error.message);
+          showFlashMessage(error.message);
           render();
         }
       };
@@ -927,12 +960,12 @@ function renderAdminPanel(container) {
         if (!confirm(`确认删除漫剧"${oldName}"？该漫剧下全部剧集会删除`)) return;
 
         try {
-          await requestJsonApi(`/api/titles/${encodeURIComponent(oldName)}`, { method: 'DELETE' });
-          setFlashMessage('漫剧删除成功');
-          if (getCurrentPathName() === oldName) history.replaceState({}, '', '/');
-          await loadSeries();
+          await fetchJsonOrThrow(`/api/titles/${encodeURIComponent(oldName)}`, { method: 'DELETE' });
+          showFlashMessage('漫剧删除成功');
+          if (getCurrentRouteSeriesName() === oldName) history.replaceState({}, '', '/');
+          await bootstrapInitialSeriesData();
         } catch (error) {
-          setFlashMessage(error.message);
+          showFlashMessage(error.message);
           render();
         }
       };
@@ -943,17 +976,17 @@ function renderAdminPanel(container) {
   container.innerHTML = `
     <section class="admin-panel">
       <div class="action-tabs episode-action-tabs">
-        <button type="button" class="action-tab-btn ${appState.activeEpisodeAction === 'create' ? 'active' : ''}" data-episode-action="create">新增剧集</button>
-        <button type="button" class="action-tab-btn ${appState.activeEpisodeAction === 'batch' ? 'active' : ''}" data-episode-action="batch">批量导入</button>
-        <button type="button" class="action-tab-btn ${appState.activeEpisodeAction === 'rename' ? 'active' : ''}" data-episode-action="rename">修改剧集</button>
-        <button type="button" class="action-tab-btn ${appState.activeEpisodeAction === 'delete' ? 'active' : ''}" data-episode-action="delete">删除剧集</button>
+        <button type="button" class="action-tab-btn ${uiState.activeEpisodeAction === 'create' ? 'active' : ''}" data-episode-action="create">新增剧集</button>
+        <button type="button" class="action-tab-btn ${uiState.activeEpisodeAction === 'batch' ? 'active' : ''}" data-episode-action="batch">批量导入</button>
+        <button type="button" class="action-tab-btn ${uiState.activeEpisodeAction === 'rename' ? 'active' : ''}" data-episode-action="rename">修改剧集</button>
+        <button type="button" class="action-tab-btn ${uiState.activeEpisodeAction === 'delete' ? 'active' : ''}" data-episode-action="delete">删除剧集</button>
       </div>
 
-      <section class="action-panel ${appState.activeEpisodeAction === 'create' ? '' : 'hidden'}">
+      <section class="action-panel ${uiState.activeEpisodeAction === 'create' ? '' : 'hidden'}">
         <form id="episode-create-form" class="stack-form">
           <select name="titleName" required>
             <option value="">选择漫剧</option>
-            ${appState.allSeries.map((series) => `<option value="${series.name}">${series.name}</option>`).join('')}
+            ${uiState.allSeries.map((series) => `<option value="${series.name}">${series.name}</option>`).join('')}
           </select>
           <input type="number" min="1" name="episodeNo" required placeholder="集号" />
           <input name="videoUrl" required placeholder="播放资源地址: 支持https://...或服务端本地绝对路径" />
@@ -961,23 +994,23 @@ function renderAdminPanel(container) {
         </form>
       </section>
 
-      <section class="action-panel ${appState.activeEpisodeAction === 'batch' ? '' : 'hidden'}">
+      <section class="action-panel ${uiState.activeEpisodeAction === 'batch' ? '' : 'hidden'}">
         <form id="episode-batch-form" class="stack-form">
           <input name="name" required placeholder="漫剧名" />
           <input name="poster" required placeholder="海报资源地址: 支持https://...或服务端本地绝对路径" />
           <input name="directoryUrl" required placeholder="视频目录资源地址: 支持https://...或服务端本地绝对路径" />
-          ${getTagMultiSelectHtml('batchTags', getAllTags())}
+          ${renderTagMultiSelectHtml('batchTags', collectAvailableTags())}
           <p id="episode-batch-tags-error" class="field-error hidden" role="alert" aria-live="polite"></p>
           <p class="hint">会自动解析目录下视频链接并按文件名中的"第1集/第一集/EP01"等集号排序导入</p>
           <button type="submit">批量导入</button>
         </form>
       </section>
 
-      <section class="action-panel ${appState.activeEpisodeAction === 'rename' ? '' : 'hidden'}">
+      <section class="action-panel ${uiState.activeEpisodeAction === 'rename' ? '' : 'hidden'}">
         <form id="episode-update-form" class="stack-form">
           <select name="titleName" required>
             <option value="">选择漫剧</option>
-            ${appState.allSeries.map((series) => `<option value="${series.name}">${series.name}</option>`).join('')}
+            ${uiState.allSeries.map((series) => `<option value="${series.name}">${series.name}</option>`).join('')}
           </select>
           <select name="episodeNo" required>
             <option value="">选择集号</option>
@@ -988,11 +1021,11 @@ function renderAdminPanel(container) {
         </form>
       </section>
 
-      <section class="action-panel ${appState.activeEpisodeAction === 'delete' ? '' : 'hidden'}">
+      <section class="action-panel ${uiState.activeEpisodeAction === 'delete' ? '' : 'hidden'}">
         <form id="episode-delete-form" class="inline-form">
           <select name="titleName" required>
             <option value="">选择漫剧</option>
-            ${appState.allSeries.map((series) => `<option value="${series.name}">${series.name}</option>`).join('')}
+            ${uiState.allSeries.map((series) => `<option value="${series.name}">${series.name}</option>`).join('')}
           </select>
           <select name="episodeNo" required>
             <option value="">选择集号</option>
@@ -1005,12 +1038,12 @@ function renderAdminPanel(container) {
 
   document.querySelectorAll('[data-episode-action]').forEach((btn) => {
     btn.onclick = () => {
-      appState.activeEpisodeAction = btn.dataset.episodeAction;
+      uiState.activeEpisodeAction = btn.dataset.episodeAction;
       render();
     };
   });
 
-  bindMultiSelectSummary(container);
+  bindMultiSelectSummaryEvents(container);
 
   const episodeCreateForm = document.getElementById('episode-create-form');
   if (episodeCreateForm) {
@@ -1024,14 +1057,14 @@ function renderAdminPanel(container) {
       };
 
       try {
-        await requestJsonApi('/api/episodes', { method: 'POST', body: JSON.stringify(payload) });
-        if (getCurrentPathName() === payload.titleName) {
-          appState.selectedEpisode = payload.episodeNo;
+        await fetchJsonOrThrow('/api/episodes', { method: 'POST', body: JSON.stringify(payload) });
+        if (getCurrentRouteSeriesName() === payload.titleName) {
+          uiState.selectedEpisode = payload.episodeNo;
         }
-        setFlashMessage('剧集新增成功');
-        await loadSeries();
+        showFlashMessage('剧集新增成功');
+        await bootstrapInitialSeriesData();
       } catch (error) {
-        setFlashMessage(error.message);
+        showFlashMessage(error.message);
         render();
       }
     };
@@ -1043,13 +1076,13 @@ function renderAdminPanel(container) {
     const tagsErrorNode = episodeBatchForm.querySelector('#episode-batch-tags-error');
     episodeBatchForm.querySelectorAll('input[name="batchTags"]').forEach((checkbox) => {
       checkbox.onchange = () => {
-        validateTagSelection(episodeBatchForm, 'batchTags', tagsErrorNode, '请至少选择一个标签');
+        validateMultiTagSelection(episodeBatchForm, 'batchTags', tagsErrorNode, '请至少选择一个标签');
       };
     });
 
     episodeBatchForm.onsubmit = async (event) => {
       event.preventDefault();
-      if (!validateTagSelection(episodeBatchForm, 'batchTags', tagsErrorNode, '请至少选择一个标签')) return;
+      if (!validateMultiTagSelection(episodeBatchForm, 'batchTags', tagsErrorNode, '请至少选择一个标签')) return;
 
       const formData = new FormData(event.target);
       const payload = {
@@ -1060,17 +1093,17 @@ function renderAdminPanel(container) {
       };
 
       try {
-        const result = await requestJsonApi('/api/episodes/batch-directory', { method: 'POST', body: JSON.stringify(payload) });
+        const result = await fetchJsonOrThrow('/api/episodes/batch-directory', { method: 'POST', body: JSON.stringify(payload) });
         const total = result.data?.total ?? 0;
         const inserted = result.data?.inserted ?? 0;
         const updated = result.data?.updated ?? 0;
-        setFlashMessage(`批量导入成功：共 ${total} 集，新增 ${inserted} 集，更新 ${updated} 集`);
-        if (getCurrentPathName() === payload.name) {
-          appState.selectedEpisode = 1;
+        showFlashMessage(`批量导入成功：共 ${total} 集，新增 ${inserted} 集，更新 ${updated} 集`);
+        if (getCurrentRouteSeriesName() === payload.name) {
+          uiState.selectedEpisode = 1;
         }
-        await loadSeries();
+        await bootstrapInitialSeriesData();
       } catch (error) {
-        setFlashMessage(error.message);
+        showFlashMessage(error.message);
         render();
       }
     };
@@ -1084,7 +1117,7 @@ function renderAdminPanel(container) {
     const videoUrlInput = episodeUpdateForm.elements.namedItem('videoUrl');
 
     const syncEpisodeEditFields = () => {
-      const episodes = getEpisodeOptionsByTitle(titleSelect.value);
+      const episodes = getEpisodeOptionsForSeries(titleSelect.value);
       const selectedEpisodeNo = Number(episodeSelect.value);
       const targetEpisode = episodes.find((episode) => episode.episode === selectedEpisodeNo);
 
@@ -1099,7 +1132,7 @@ function renderAdminPanel(container) {
     };
 
     const syncEpisodeOptions = () => {
-      fillEpisodeSelectByTitle(titleSelect, episodeSelect, '选择集号');
+      fillEpisodeSelectForSeries(titleSelect, episodeSelect, '选择集号');
       syncEpisodeEditFields();
     };
 
@@ -1119,11 +1152,11 @@ function renderAdminPanel(container) {
       if (!payload.titleName || Number.isNaN(payload.episodeNo) || Number.isNaN(payload.newEpisodeNo)) return;
 
       try {
-        await requestJsonApi('/api/episodes', { method: 'PATCH', body: JSON.stringify(payload) });
-        setFlashMessage('剧集信息修改成功');
-        await loadSeries();
+        await fetchJsonOrThrow('/api/episodes', { method: 'PATCH', body: JSON.stringify(payload) });
+        showFlashMessage('剧集信息修改成功');
+        await bootstrapInitialSeriesData();
       } catch (error) {
-        setFlashMessage(error.message);
+        showFlashMessage(error.message);
         render();
       }
     };
@@ -1135,7 +1168,7 @@ function renderAdminPanel(container) {
     const episodeSelect = episodeDeleteForm.elements.namedItem('episodeNo');
 
     const syncEpisodeOptions = () => {
-      fillEpisodeSelectByTitle(titleSelect, episodeSelect, '选择集号');
+      fillEpisodeSelectForSeries(titleSelect, episodeSelect, '选择集号');
     };
 
     titleSelect.onchange = syncEpisodeOptions;
@@ -1152,11 +1185,11 @@ function renderAdminPanel(container) {
       if (!confirm(`确认删除「${payload.titleName}」第${payload.episodeNo}集？`)) return;
 
       try {
-        await requestJsonApi('/api/episodes', { method: 'DELETE', body: JSON.stringify(payload) });
-        setFlashMessage('剧集删除成功');
-        await loadSeries();
+        await fetchJsonOrThrow('/api/episodes', { method: 'DELETE', body: JSON.stringify(payload) });
+        showFlashMessage('剧集删除成功');
+        await bootstrapInitialSeriesData();
       } catch (error) {
-        setFlashMessage(error.message);
+        showFlashMessage(error.message);
         render();
       }
     };
@@ -1164,11 +1197,11 @@ function renderAdminPanel(container) {
 }
 
 window.addEventListener('popstate', () => {
-  if (getCurrentPathName()) {
+  if (getCurrentRouteSeriesName()) {
     render();
     return;
   }
-  loadHomeSeries();
+  loadHomePageSeriesData();
 });
 render();
-loadSeries();
+bootstrapInitialSeriesData();
