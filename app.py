@@ -131,7 +131,7 @@ def append_timestamp_to_filename(path_obj: Path) -> str:
     return f'{path_obj.name}_{timestamp}'
 
 
-def normalize_resource_value(value: str, name: str):
+def normalize_resource_value(value: str, name: str, local_path_kind: str = 'any'):
     normalized = value.strip()
     if is_http_url(normalized):
         return normalized
@@ -163,7 +163,12 @@ def normalize_resource_value(value: str, name: str):
 
     client = tos.TosClientV2(access_key, secret_key, endpoint, region)
 
+    if local_path_kind not in {'any', 'file', 'dir'}:
+        raise ValueError('local_path_kind 参数非法')
+
     if path_obj.is_file():
+        if local_path_kind == 'dir':
+            raise ValueError('本地路径必须是目录，不能是文件')
         filename_with_ts = append_timestamp_to_filename(path_obj)
         key = f'{name}/{filename_with_ts}'
         resp = client.put_object_from_file(bucket_name, key, str(path_obj))
@@ -172,6 +177,8 @@ def normalize_resource_value(value: str, name: str):
         return f'https://{bucket_name}.{endpoint}/{key}'
 
     if path_obj.is_dir():
+        if local_path_kind == 'file':
+            raise ValueError('本地路径必须是文件，不能是目录')
         url_list = []
         for file_path in sorted(path_obj.rglob('*')):
             if not file_path.is_file():
@@ -585,7 +592,7 @@ def api_titles_post():
 
     name = body['name'].strip()
     try:
-        poster = normalize_resource_value(body['poster'], 'posters')
+        poster = normalize_resource_value(body['poster'], 'posters', local_path_kind='file')
     except ValueError as exc:
         return json_response(400, message=str(exc))
     tags = [tag.strip() for tag in body.get('tags', []) if validate_non_empty_string(tag)]
@@ -608,7 +615,7 @@ def api_titles_patch(title_name):
 
     new_name = body['newName'].strip()
     try:
-        poster = normalize_resource_value(body['poster'], 'posters')
+        poster = normalize_resource_value(body['poster'], 'posters', local_path_kind='file')
     except ValueError as exc:
         return json_response(400, message=str(exc))
     tags = [tag.strip() for tag in body['tags'] if validate_non_empty_string(tag)]
@@ -652,8 +659,8 @@ def api_episodes_batch_directory():
         return json_response(400, message='tags 至少需要一个标签')
 
     try:
-        poster = normalize_resource_value(poster, f'episodes/{name}/poster')
-        normalized_directory = normalize_resource_value(directory_url, f'episodes/{name}/directory')
+        poster = normalize_resource_value(poster, f'episodes/{name}/poster', local_path_kind='file')
+        normalized_directory = normalize_resource_value(directory_url, f'episodes/{name}/directory', local_path_kind='dir')
     except ValueError as exc:
         return json_response(400, message=str(exc))
     if isinstance(normalized_directory, list):
@@ -748,7 +755,7 @@ def api_episodes_post():
     if not title_name or episode_no is None or not raw_video_url:
         return json_response(400, message='参数不完整')
     try:
-        video_url = normalize_resource_value(raw_video_url, f'episodes/{title_name}')
+        video_url = normalize_resource_value(raw_video_url, f'episodes/{title_name}', local_path_kind='file')
     except ValueError as exc:
         return json_response(400, message=str(exc))
     if isinstance(video_url, list):
@@ -784,7 +791,7 @@ def api_episodes_patch():
     if not title_name or source_no is None or target_no is None or not raw_video_url:
         return json_response(400, message='参数不完整')
     try:
-        video_url = normalize_resource_value(raw_video_url, f'episodes/{title_name}')
+        video_url = normalize_resource_value(raw_video_url, f'episodes/{title_name}', local_path_kind='file')
     except ValueError as exc:
         return json_response(400, message=str(exc))
     if isinstance(video_url, list):
