@@ -1,61 +1,61 @@
 /**
- * 统一格式化日期时间字符串。
+ * 统一格式化日期时间字符串
  *
- * @param {string|number|Date} iso - 可被 Date 解析的时间值。
- * @returns {string} 以 zh-CN 规则输出的 24 小时制时间文本。
+ * @param {string|number|Date} iso - 可被Date解析的时间值
+ * @returns {string} 以zh-CN规则输出的24小时制时间文本
  */
 const formatDateTime = (iso) => new Date(iso).toLocaleString('zh-CN', { hour12: false });
 
 /**
- * 全局页面状态容器。
+ * 全局页面状态容器
  *
- * 说明：集中管理首页、详情页与管理弹窗的 UI 状态，避免散落的全局变量。
+ * 说明: 集中管理首页、详情页与管理弹窗的UI状态，避免散落的全局变量
  */
 const appState = {
-  allSeries: [], // 全量漫剧数据（含剧集列表）。
-  allTags: [], // 标签全集（来自后端 /api/tags）。
-  selectedTag: null, // 首页当前选中的标签，null 表示“全部”。
-  searchQuery: '', // 首页搜索关键字。
-  sortBy: 'updated_desc', // 首页排序方式。
-  currentPage: 1, // 首页当前页码。
-  pageSize: 25, // 首页每页条数。
-  homeSeries: [], // 当前筛选条件下的首页列表数据。
-  homeTotal: 0, // 当前筛选条件下的总条数。
-  homeLoading: false, // 首页列表加载状态。
-  homeError: null, // 首页列表错误信息。
-  selectedEpisode: null, // 详情页当前选中的剧集集号。
-  episodePage: 1, // 详情页剧集标签分页的当前页。
-  episodePageSize: 10, // 详情页剧集标签分页大小。
-  detailSeriesName: '', // 当前详情页绑定的漫剧名称。
-  tagExpanded: false, // 首页标签栏是否展开更多项。
-  loading: true, // 首屏初始化加载状态。
-  error: null, // 首屏初始化错误信息。
-  activeAdminTab: 'tag', // 管理弹窗当前主 Tab（tag/title/episode）。
-  adminModalOpen: false, // 管理弹窗开关状态。
-  flashMessage: '', // 顶部闪现提示文案。
-  flashAutoCloseTimeout: null, // 闪现提示自动关闭定时器句柄。
-  flashVersion: 0, // 闪现提示版本号（用于控制重复计时）。
-  flashVersionRendered: 0, // 已渲染的闪现提示版本号。
-  activeTagAction: 'create', // 标签管理子动作（create/rename/delete）。
-  activeTitleAction: 'create', // 漫剧管理子动作（create/rename/delete）。
-  activeEpisodeAction: 'create' // 剧集管理子动作（create/batch/rename/delete）。
+  allSeries: [], // 全量漫剧数据(含剧集列表)
+  allTags: [], // 标签全集(来自后端 /api/tags)
+  selectedTag: null, // 首页当前选中的标签，null 表示"全部"
+  searchQuery: '', // 首页搜索关键字
+  sortBy: 'updated_desc', // 首页排序方式
+  currentPage: 1, // 首页当前页码
+  pageSize: 25, // 首页每页条数
+  homeSeries: [], // 当前筛选条件下的首页列表数据
+  homeTotal: 0, // 当前筛选条件下的总条数
+  homeLoading: false, // 首页列表加载状态
+  homeError: null, // 首页列表错误信息
+  selectedEpisode: null, // 详情页当前选中的剧集集号
+  episodePage: 1, // 详情页剧集标签分页的当前页
+  episodePageSize: 10, // 详情页剧集标签分页大小
+  detailSeriesName: '', // 当前详情页绑定的漫剧名称
+  tagExpanded: false, // 首页标签栏是否展开更多项
+  loading: true, // 首屏初始化加载状态
+  error: null, // 首屏初始化错误信息
+  activeAdminTab: 'tag', // 管理弹窗当前主 Tab(tag/title/episode)
+  adminModalOpen: false, // 管理弹窗开关状态
+  flashMessage: '', // 顶部闪现提示文案
+  flashAutoCloseTimeout: null, // 闪现提示自动关闭定时器句柄
+  flashVersion: 0, // 闪现提示版本号(用于控制重复计时)
+  flashVersionRendered: 0, // 已渲染的闪现提示版本号
+  activeTagAction: 'create', // 标签管理子动作(create/rename/delete)
+  activeTitleAction: 'create', // 漫剧管理子动作(create/rename/delete)
+  activeEpisodeAction: 'create' // 剧集管理子动作(create/batch/rename/delete)
 };
 
 /**
- * 读取当前 URL Path 对应的漫剧名。
+ * 读取当前 URL Path 对应的漫剧名
  *
- * @returns {string} 解码后的 Path 名称；首页时返回空字符串。
+ * @returns {string} 解码后的 Path 名称；首页时返回空字符串
  */
 function getCurrentPathName() {
   return decodeURIComponent(location.pathname.slice(1));
 }
 
 /**
- * 发起 JSON API 请求，并统一处理错误响应。
+ * 发起 JSON API 请求，并统一处理错误响应
  *
- * @param {string} url - 请求地址。
- * @param {RequestInit} [options={}] - fetch 配置项。
- * @returns {Promise<any>} 解析后的 JSON 数据。
+ * @param {string} url - 请求地址
+ * @param {RequestInit} [options={}] - fetch 配置项
+ * @returns {Promise<any>} 解析后的 JSON 数据
  */
 async function requestJsonApi(url, options = {}) {
   const response = await fetch(url, {
@@ -70,7 +70,7 @@ async function requestJsonApi(url, options = {}) {
 }
 
 /**
- * 加载标签全集，供首页筛选与管理表单复用。
+ * 加载标签全集，供首页筛选与管理表单复用
  */
 async function loadTags() {
   const payload = await requestJsonApi('/api/tags');
@@ -78,10 +78,10 @@ async function loadTags() {
 }
 
 /**
- * 初始化加载首页基础数据（漫剧 + 标签），并触发首屏渲染。
+ * 初始化加载首页基础数据(漫剧 + 标签)，并触发首屏渲染
  */
 async function loadSeries() {
-  // 初始化加载：拉取漫剧和标签后，完成数据规范化并触发首屏渲染。
+  // 初始化加载：拉取漫剧和标签后，完成数据规范化并触发首屏渲染
   try {
     const [seriesPayload] = await Promise.all([
       requestJsonApi('/api/series?page=1&pageSize=10000'),
@@ -107,7 +107,7 @@ async function loadSeries() {
 }
 
 /**
- * 按当前筛选、搜索、排序和分页条件加载首页列表。
+ * 按当前筛选、搜索、排序和分页条件加载首页列表
  */
 async function loadHomeSeries() {
   appState.homeLoading = true;
@@ -142,10 +142,10 @@ async function loadHomeSeries() {
 }
 
 /**
- * 获取标签列表。
- * 优先使用后端标签全集，缺失时从漫剧数据反推。
+ * 获取标签列表
+ * 优先使用后端标签全集，缺失时从漫剧数据反推
  *
- * @returns {string[]} 排序后的标签列表。
+ * @returns {string[]} 排序后的标签列表
  */
 function getAllTags() {
   if (appState.allTags.length) return [...appState.allTags];
@@ -154,10 +154,10 @@ function getAllTags() {
 
 
 /**
- * 转义 HTML 特殊字符，防止字符串注入到模板时破坏 DOM 结构。
+ * 转义 HTML 特殊字符，防止字符串注入到模板时破坏 DOM 结构
  *
- * @param {any} value - 待转义的值。
- * @returns {string} 安全的 HTML 文本。
+ * @param {any} value - 待转义的值
+ * @returns {string} 安全的 HTML 文本
  */
 function escapeHtml(value) {
   return String(value)
@@ -169,10 +169,10 @@ function escapeHtml(value) {
 }
 
 /**
- * 规范化剧集列表：同一集号仅保留更新时间最新的记录。
+ * 规范化剧集列表：同一集号仅保留更新时间最新的记录
  *
- * @param {Array<Object>} episodes - 原始剧集列表。
- * @returns {Array<Object>} 规范化后并按集号升序的剧集列表。
+ * @param {Array<Object>} episodes - 原始剧集列表
+ * @returns {Array<Object>} 规范化后并按集号升序的剧集列表
  */
 function normalizeEpisodes(episodes) {
   const latestEpisodeByNumber = new Map();
@@ -198,10 +198,10 @@ function normalizeEpisodes(episodes) {
 }
 
 /**
- * 根据漫剧名称获取对应的剧集选项。
+ * 根据漫剧名称获取对应的剧集选项
  *
- * @param {string} titleName - 漫剧名称。
- * @returns {Array<Object>} 可用于下拉框的剧集列表。
+ * @param {string} titleName - 漫剧名称
+ * @returns {Array<Object>} 可用于下拉框的剧集列表
  */
 function getEpisodeOptionsByTitle(titleName) {
   const matchedSeries = appState.allSeries.find((series) => series.name === titleName);
@@ -423,12 +423,12 @@ function renderHome(container) {
       <input id="global-search" class="global-search" type="search" placeholder="全局搜索：输入漫剧名称" value="${escapeHtml(appState.searchQuery)}" />
       <button type="submit" class="primary-btn search-btn">搜索</button>
       <select id="global-sort" class="global-sort" aria-label="排序依据">
-        <option value="updated_desc" ${appState.sortBy === 'updated_desc' ? 'selected' : ''}>最后更新时间（倒序）</option>
-        <option value="updated_asc" ${appState.sortBy === 'updated_asc' ? 'selected' : ''}>最后更新时间（顺序）</option>
-        <option value="ingested_asc" ${appState.sortBy === 'ingested_asc' ? 'selected' : ''}>最早入库时间（顺序）</option>
-        <option value="ingested_desc" ${appState.sortBy === 'ingested_desc' ? 'selected' : ''}>最早入库时间（倒序）</option>
-        <option value="name_asc" ${appState.sortBy === 'name_asc' ? 'selected' : ''}>名称（顺序）</option>
-        <option value="name_desc" ${appState.sortBy === 'name_desc' ? 'selected' : ''}>名称（倒序）</option>
+        <option value="updated_desc" ${appState.sortBy === 'updated_desc' ? 'selected' : ''}>最后更新时间(倒序)</option>
+        <option value="updated_asc" ${appState.sortBy === 'updated_asc' ? 'selected' : ''}>最后更新时间(顺序)</option>
+        <option value="ingested_asc" ${appState.sortBy === 'ingested_asc' ? 'selected' : ''}>最早入库时间(顺序)</option>
+        <option value="ingested_desc" ${appState.sortBy === 'ingested_desc' ? 'selected' : ''}>最早入库时间(倒序)</option>
+        <option value="name_asc" ${appState.sortBy === 'name_asc' ? 'selected' : ''}>名称(顺序)</option>
+        <option value="name_desc" ${appState.sortBy === 'name_desc' ? 'selected' : ''}>名称(倒序)</option>
       </select>
     </form>
   `;
@@ -540,7 +540,7 @@ function renderHome(container) {
       }).join('')}
     </div>
     <button type="button" class="page-btn" data-page="next" ${appState.currentPage === totalPages ? 'disabled' : ''}>下一页</button>
-    <span class="page-meta">第 ${appState.currentPage} / ${totalPages} 页（共 ${appState.homeTotal} 个）</span>
+    <span class="page-meta">第 ${appState.currentPage} / ${totalPages} 页(共 ${appState.homeTotal} 个)</span>
     <form class="page-jump-form" id="page-jump-form">
       <label for="page-jump-input">跳转</label>
       <input id="page-jump-input" type="number" min="1" max="${totalPages}" value="${appState.currentPage}" />
@@ -768,7 +768,7 @@ function renderAdminPanel(container) {
         const formData = new FormData(event.target);
         const tag = String(formData.get('tagName') || '').trim();
         if (!tag) return;
-        if (!confirm(`确认删除标签“${tag}”？会从所有漫剧里移除该标签。`)) return;
+        if (!confirm(`确认删除标签"${tag}"？会从所有漫剧里移除该标签`)) return;
 
         try {
           await requestJsonApi(`/api/tags/${encodeURIComponent(tag)}`, { method: 'DELETE' });
@@ -924,7 +924,7 @@ function renderAdminPanel(container) {
         const formData = new FormData(event.target);
         const oldName = String(formData.get('name') || '').trim();
         if (!oldName) return;
-        if (!confirm(`确认删除漫剧“${oldName}”？该漫剧下全部剧集会删除。`)) return;
+        if (!confirm(`确认删除漫剧"${oldName}"？该漫剧下全部剧集会删除`)) return;
 
         try {
           await requestJsonApi(`/api/titles/${encodeURIComponent(oldName)}`, { method: 'DELETE' });
@@ -968,7 +968,7 @@ function renderAdminPanel(container) {
           <input name="directoryUrl" required placeholder="视频目录URL，例如 http://localhost:7777/某个目录/" />
           ${getTagMultiSelectHtml('batchTags', getAllTags())}
           <p id="episode-batch-tags-error" class="field-error hidden" role="alert" aria-live="polite"></p>
-          <p class="hint">会自动解析目录下视频链接并按文件名中的“第1集/第一集/EP01”等集号排序导入。</p>
+          <p class="hint">会自动解析目录下视频链接并按文件名中的"第1集/第一集/EP01"等集号排序导入</p>
           <button type="submit">批量导入</button>
         </form>
       </section>
