@@ -168,39 +168,52 @@ def resolve_resource_to_url(value: str, name: str, local_path_kind: str = 'any')
     bucket_name = (bucket_name or "").strip()
 
     try:
-        path_obj = Path(normalized).expanduser().resolve(strict=True)
+        # 把用户输入的本地路径转换成绝对Path对象，expanduser()会展开"~"，resolve(strict=True)会要求路径必须真实存在
+        path_object = Path(normalized).expanduser().resolve(strict=True)
     except FileNotFoundError:
-        raise ValueError('本地路径不存在')
+        # 路径不存在时，转成统一的业务错误给上层接口处理
+        raise ValueError(f'<{normalized}>本地路径不存在')
     except Exception as e:
+        # 兜底捕获其他路径解析错误，例如非法路径格式或系统层异常
         raise ValueError(f'路径解析失败: {e}')
 
     client = tos.TosClientV2(access_key, secret_key, endpoint, region)
 
+    # 限制当前场景允许的路径类型，any=文件或目录都可以，file=只允许文件，dir=只允许目录
     if local_path_kind not in {'any', 'file', 'dir'}:
         raise ValueError('local_path_kind 参数非法')
 
-    if path_obj.is_file():
+    # 单文件上传分支
+    if path_object.is_file():
         if local_path_kind == 'dir':
             raise ValueError('本地路径必须是目录，不能是文件')
-        filename_with_ts = append_millisecond_timestamp_to_filename(path_obj)
+        # 给文件名追加时间戳，避免上传到对象存储时重名覆盖
+        filename_with_ts = append_millisecond_timestamp_to_filename(path_object)
+        # 对象存储中的目标 key，例如 posters/a_1712345678901.jpg
         key = f'{name}/{filename_with_ts}'
-        resp = client.put_object_from_file(bucket_name, key, str(path_obj))
+        resp = client.put_object_from_file(bucket_name, key, str(path_object))
         if getattr(resp, 'status_code', None) != 200:
             raise ValueError(f'上传失败, status_code={getattr(resp, "status_code", "unknown")}')
+        # 返回上传后可访问的完整 URL。
         return f'https://{bucket_name}.{endpoint}/{key}'
 
-    if path_obj.is_dir():
+    # 目录批量上传分支。
+    if path_object.is_dir():
         if local_path_kind == 'file':
             raise ValueError('本地路径必须是文件，不能是目录')
+        # 收集目录下所有成功上传文件的访问地址。
         url_list = []
-        for file_path in sorted(path_obj.rglob('*')):
+        for file_path in sorted(path_object.rglob('*')):
+            # 只上传文件，跳过目录节点。
             if not file_path.is_file():
                 continue
 
-            relative_path = file_path.relative_to(path_obj)
+            # relative_path 用于保留原目录结构；parent_dir 是相对父目录路径。
+            relative_path = file_path.relative_to(path_object)
             parent_dir = relative_path.parent.as_posix()
             filename_with_ts = append_millisecond_timestamp_to_filename(file_path)
 
+            # 如果文件位于子目录下，就把子目录结构一并带到对象存储 key 中。
             if parent_dir and parent_dir != '.':
                 key = f'{name}/{parent_dir}/{filename_with_ts}'
             else:
@@ -212,11 +225,13 @@ def resolve_resource_to_url(value: str, name: str, local_path_kind: str = 'any')
 
             url_list.append(f'https://{bucket_name}.{endpoint}/{key}')
 
+        # 目录存在但没有任何可上传文件时，视为无效输入。
         if not url_list:
             raise ValueError('目录为空，或目录下没有可上传文件')
 
         return url_list
 
+    # 路径存在，但既不是普通文件也不是普通目录。
     raise ValueError('输入路径既不是文件也不是目录')
 
 
