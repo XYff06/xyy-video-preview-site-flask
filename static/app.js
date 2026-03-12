@@ -704,44 +704,45 @@ function renderAdminPanel(adminPanelContainer) {
          * 由于render()会整体重绘管理面板，所以这里采用重绘后重新绑定事件的模式
          */
         adminPanelContainer.innerHTML = `
-      <section class="admin-panel">
-        <div class="action-tabs">
-          <button type="button" class="action-tab-btn ${uiState.activeTagAction === 'create' ? 'active' : ''}" data-tag-action="create">新增标签</button>
-          <button type="button" class="action-tab-btn ${uiState.activeTagAction === 'rename' ? 'active' : ''}" data-tag-action="rename">修改标签</button>
-          <button type="button" class="action-tab-btn ${uiState.activeTagAction === 'delete' ? 'active' : ''}" data-tag-action="delete">删除标签</button>
-        </div>
+<section class="admin-panel">
+    <div class="action-tabs">
+        <button type="button" class="admin-action-tab-button ${uiState.activeTagAction === 'create' ? 'active' : ''}"data-tag-action="create">新增标签</button>
+        <button type="button" class="admin-action-tab-button ${uiState.activeTagAction === 'rename' ? 'active' : ''}"data-tag-action="rename">修改标签</button>
+        <button type="button" class="admin-action-tab-button ${uiState.activeTagAction === 'delete' ? 'active' : ''}"data-tag-action="delete">删除标签</button>
+    </div>
 
-        <section class="action-panel ${uiState.activeTagAction === 'create' ? '' : 'hidden'}">
-          <form id="tag-create-form" class="inline-form">
-            <input name="tagName" required placeholder="标签名" />
+    <section class="action-panel ${uiState.activeTagAction === 'create' ? '' : 'hidden'}">
+        <form id="tag-create-form" class="inline-form">
+            <input name="tagName" required placeholder="标签名"/>
             <button type="submit">新增</button>
-          </form>
-        </section>
+        </form>
+    </section>
 
-        <section class="action-panel ${uiState.activeTagAction === 'rename' ? '' : 'hidden'}">
-          <form id="tag-rename-form" class="inline-form">
+    <section class="action-panel ${uiState.activeTagAction === 'rename' ? '' : 'hidden'}">
+        <form id="tag-rename-form" class="inline-form">
             <select name="tagName" required>
-              <option value="">选择标签</option>
-              ${availableTags.map((tagName) => `<option value="${tagName}">${tagName}</option>`).join('')}
+                <option value="">选择标签</option>
+                ${availableTags.map((tagName) => `<option value="${tagName}">${tagName}</option>`).join('')}
             </select>
-            <input name="newTagName" required placeholder="新标签名" />
+            <input name="newTagName" required placeholder="新标签名"/>
             <button type="submit">修改</button>
-          </form>
-        </section>
+        </form>
+    </section>
 
-        <section class="action-panel ${uiState.activeTagAction === 'delete' ? '' : 'hidden'}">
-          <form id="tag-delete-form" class="inline-form">
+    <section class="action-panel ${uiState.activeTagAction === 'delete' ? '' : 'hidden'}">
+        <form id="tag-delete-form" class="inline-form">
             <select name="tagName" required>
-              <option value="">选择标签</option>
-              ${availableTags.map((tagName) => `<option value="${tagName}">${tagName}</option>`).join('')}
+                <option value="">选择标签</option>
+                ${availableTags.map((tagName) => `<option value="${tagName}">${tagName}</option>`).join('')}
             </select>
             <button type="submit">删除</button>
-          </form>
-        </section>
-      </section>
-    `;
-
-        // 操作切换按钮只负责切换 uiState，再统一交给 render() 做界面重绘。
+        </form>
+    </section>
+</section>
+        `;
+        /**
+         * 操作切换按钮只负责切换uiState，再统一交给render()做界面重绘
+         */
         document.querySelectorAll('[data-tag-action]').forEach((actionSwitchButton) => {
             actionSwitchButton.onclick = () => {
                 uiState.activeTagAction = actionSwitchButton.dataset.tagAction;
@@ -751,11 +752,15 @@ function renderAdminPanel(adminPanelContainer) {
 
         const tagCreateForm = document.getElementById('tag-create-form');
         if (tagCreateForm) {
-            // 新建标签:
-            // 1. 阻止表单默认提交
-            // 2. 从表单提取标签名并清洗空白
-            // 3. 调用后端创建接口
-            // 4. 创建成功后重新拉取基础数据，让筛选区、表单选项、列表状态全部同步
+            /**
+             * 新建标签:
+             * 1. 阻止表单默认提交
+             * 2. 从表单提取标签名并清洗空白
+             * 3. 调用后端创建接口
+             * 4. 创建成功后重新拉取基础数据，让筛选区、表单选项、列表状态全部同步
+             * @param submitEvent
+             * @returns {Promise<void>}
+             */
             tagCreateForm.onsubmit = async (submitEvent) => {
                 submitEvent.preventDefault();
                 const submittedFormData = new FormData(submitEvent.target);
@@ -843,9 +848,9 @@ function renderAdminPanel(adminPanelContainer) {
         adminPanelContainer.innerHTML = `
       <section class="admin-panel">
         <div class="action-tabs">
-          <button type="button" class="action-tab-btn ${uiState.activeTitleAction === 'create' ? 'active' : ''}" data-title-action="create">新增漫剧</button>
-          <button type="button" class="action-tab-btn ${uiState.activeTitleAction === 'rename' ? 'active' : ''}" data-title-action="rename">修改漫剧</button>
-          <button type="button" class="action-tab-btn ${uiState.activeTitleAction === 'delete' ? 'active' : ''}" data-title-action="delete">删除漫剧</button>
+          <button type="button" class="admin-action-tab-button ${uiState.activeTitleAction === 'create' ? 'active' : ''}" data-title-action="create">新增漫剧</button>
+          <button type="button" class="admin-action-tab-button ${uiState.activeTitleAction === 'rename' ? 'active' : ''}" data-title-action="rename">修改漫剧</button>
+          <button type="button" class="admin-action-tab-button ${uiState.activeTitleAction === 'delete' ? 'active' : ''}" data-title-action="delete">删除漫剧</button>
         </div>
 
         <section class="action-panel ${uiState.activeTitleAction === 'create' ? '' : 'hidden'}">
@@ -1001,10 +1006,10 @@ function renderAdminPanel(adminPanelContainer) {
     adminPanelContainer.innerHTML = `
     <section class="admin-panel">
       <div class="action-tabs episode-action-tabs">
-        <button type="button" class="action-tab-btn ${uiState.activeEpisodeAction === 'create' ? 'active' : ''}" data-episode-action="create">新增剧集</button>
-        <button type="button" class="action-tab-btn ${uiState.activeEpisodeAction === 'batch' ? 'active' : ''}" data-episode-action="batch">批量导入</button>
-        <button type="button" class="action-tab-btn ${uiState.activeEpisodeAction === 'rename' ? 'active' : ''}" data-episode-action="rename">修改剧集</button>
-        <button type="button" class="action-tab-btn ${uiState.activeEpisodeAction === 'delete' ? 'active' : ''}" data-episode-action="delete">删除剧集</button>
+        <button type="button" class="admin-action-tab-button ${uiState.activeEpisodeAction === 'create' ? 'active' : ''}" data-episode-action="create">新增剧集</button>
+        <button type="button" class="admin-action-tab-button ${uiState.activeEpisodeAction === 'batch' ? 'active' : ''}" data-episode-action="batch">批量导入</button>
+        <button type="button" class="admin-action-tab-button ${uiState.activeEpisodeAction === 'rename' ? 'active' : ''}" data-episode-action="rename">修改剧集</button>
+        <button type="button" class="admin-action-tab-button ${uiState.activeEpisodeAction === 'delete' ? 'active' : ''}" data-episode-action="delete">删除剧集</button>
       </div>
 
       <section class="action-panel ${uiState.activeEpisodeAction === 'create' ? '' : 'hidden'}">

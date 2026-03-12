@@ -596,7 +596,7 @@ body {
     grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
-.action-tab-btn {
+.admin-action-tab-button {
     border: 1px solid var(--color-border-default);
     border-radius: 8px;
     background: #f8f9fc;
@@ -605,7 +605,7 @@ body {
     font-weight: 600;
 }
 
-.action-tab-btn.active {
+.admin-action-tab-button.active {
     border-color: var(--color-accent-primary);
     background: #edf5ff;
     color: var(--color-accent-primary);
