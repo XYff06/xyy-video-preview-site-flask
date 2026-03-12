@@ -12,7 +12,7 @@ import re
 import time
 from contextlib import contextmanager
 from datetime import datetime
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from urllib.parse import unquote, urljoin, urlparse
 
 import psycopg
@@ -87,7 +87,7 @@ def open_db_transaction():
 
 
 def build_json_response(status: int, **payload):
-    """统一构造 JSON 响应对象并设置 HTTP 状态码。"""
+    """统一构造JSON响应对象并设置HTTP状态码"""
     response = jsonify(payload)
     response.status_code = status
     return response
@@ -574,17 +574,17 @@ def api_tags_get():
 
 @flask_app.route('/api/tags', methods=['POST'])
 def api_tags_post():
-    """创建标签。"""
-    body = request.get_json(silent=True) or {}
-    if not is_non_empty_text(body.get('tagName')):
-        return build_json_response(400, message='tagName 不能为空')
-    tag_name = body['tagName'].strip()
+    """创建标签"""
+    request_body = request.get_json(silent=True) or {}
+    if not is_non_empty_text(request_body.get('tagName')):
+        return build_json_response(400, message='tagName不能为空')
+    created_tag_name = request_body['tagName'].strip()
     try:
-        with open_db_transaction() as conn, conn.cursor() as cur:
-            cur.execute('INSERT INTO tag(tag_name) VALUES (%s)', (tag_name,))
+        with open_db_transaction() as db_connection, db_connection.cursor() as db_cursor:
+            db_cursor.execute('INSERT INTO tag(tag_name) VALUES (%s)', (created_tag_name,))
     except UniqueViolation:
-        return build_json_response(409, message='标签已存在')
-    return build_json_response(201, message='标签已创建，请为剧集分配此标签', data=tag_name)
+        return build_json_response(409, message=f'<{created_tag_name}>标签已存在')
+    return build_json_response(201, message=f'<{created_tag_name}>标签已创建，请为剧集分配此标签', data=created_tag_name)
 
 
 @flask_app.route('/api/tags/<path:tag_name>', methods=['PATCH'])

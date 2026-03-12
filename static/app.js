@@ -60,28 +60,26 @@ function getCurrentRouteSeriesName() {
 }
 
 /**
- * 发起 JSON API 请求，并统一处理错误响应
+ * 发起JSON API请求，并统一处理错误响应
  *
- * @param {string} url - 请求地址
- * @param {RequestInit} [options={}] - fetch 配置项
- * @returns {Promise<any>} 解析后的 JSON 数据
+ * @param {string} requestUrl - 请求地址
+ * @param {RequestInit} [requestOptions={}] - fetch配置项
+ * @returns {Promise<any>} 解析后的JSON数据
  */
-async function fetchJsonOrThrow(url, options = {}) {
-    const response = await fetch(url, {
-        headers: {'Content-Type': 'application/json'}, ...options
-    });
-    const payload = await response.json();
-    if (!response.ok) {
-        throw new Error(payload.message || '请求失败');
+async function requestJsonApiOrThrow(requestUrl, requestOptions = {}) {
+    const httpResponse = await fetch(requestUrl, {headers: {'Content-Type': 'application/json'}, ...requestOptions});
+    const responseJson = await httpResponse.json();
+    if (!httpResponse.ok) {
+        throw new Error(responseJson.message || '请求失败');
     }
-    return payload;
+    return responseJson;
 }
 
 /**
  * 加载标签全集，供首页筛选与管理表单复用
  */
 async function loadTags() {
-    const payload = await fetchJsonOrThrow('/api/tags');
+    const payload = await requestJsonApiOrThrow('/api/tags');
     uiState.allTags = payload.data;
 }
 
@@ -91,7 +89,7 @@ async function loadTags() {
 async function bootstrapInitialSeriesData() {
     // 初始化加载: 拉取漫剧和标签后，完成数据规范化并触发首屏渲染
     try {
-        const [seriesPayload] = await Promise.all([fetchJsonOrThrow('/api/series?page=1&pageSize=10000'), loadTags()]);
+        const [seriesPayload] = await Promise.all([requestJsonApiOrThrow('/api/series?page=1&pageSize=10000'), loadTags()]);
         uiState.allSeries = seriesPayload.data.map((item) => ({
             ...item, tags: new Set(item.tags), episodes: buildCanonicalEpisodeList(item.episodes || [])
         }));
@@ -125,7 +123,7 @@ async function loadHomePageSeriesData() {
     params.set('sort', uiState.sortBy);
 
     try {
-        const payload = await fetchJsonOrThrow(`/api/series?${params.toString()}`);
+        const payload = await requestJsonApiOrThrow(`/api/series?${params.toString()}`);
         uiState.homeSeries = payload.data.map((item) => ({
             ...item, episodes: buildCanonicalEpisodeList(item.episodes || [])
         }));
@@ -766,10 +764,10 @@ function renderAdminPanel(adminPanelContainer) {
                 const submittedFormData = new FormData(submitEvent.target);
                 const createdTagName = String(submittedFormData.get('tagName') || '').trim();
                 try {
-                    await fetchJsonOrThrow('/api/tags', {
+                    await requestJsonApiOrThrow('/api/tags', {
                         method: 'POST', body: JSON.stringify({tagName: createdTagName})
                     });
-                    showFlashMessage(`标签「${createdTagName}」已创建`);
+                    showFlashMessage(`标签[${createdTagName}]已创建`);
                     await bootstrapInitialSeriesData();
                 } catch (error) {
                     showFlashMessage(error.message);
@@ -801,7 +799,7 @@ function renderAdminPanel(adminPanelContainer) {
                 if (!originalTagName || !updatedTagName || updatedTagName === originalTagName) return;
 
                 try {
-                    await fetchJsonOrThrow(`/api/tags/${encodeURIComponent(originalTagName)}`, {
+                    await requestJsonApiOrThrow(`/api/tags/${encodeURIComponent(originalTagName)}`, {
                         method: 'PATCH', body: JSON.stringify({newTagName: updatedTagName})
                     });
                     showFlashMessage('标签改名成功');
@@ -829,7 +827,7 @@ function renderAdminPanel(adminPanelContainer) {
                 if (!confirm(`确认删除标签"${deletedTagName}"？会从所有漫剧里移除该标签`)) return;
 
                 try {
-                    await fetchJsonOrThrow(`/api/tags/${encodeURIComponent(deletedTagName)}`, {method: 'DELETE'});
+                    await requestJsonApiOrThrow(`/api/tags/${encodeURIComponent(deletedTagName)}`, {method: 'DELETE'});
                     showFlashMessage('标签删除成功');
                     // 被删标签如果正处于首页筛选中，需要清空筛选条件。
                     if (uiState.selectedTag === deletedTagName) uiState.selectedTag = null;
@@ -919,7 +917,7 @@ function renderAdminPanel(adminPanelContainer) {
                     return;
                 }
                 try {
-                    await fetchJsonOrThrow('/api/titles', {
+                    await requestJsonApiOrThrow('/api/titles', {
                         method: 'POST', body: JSON.stringify({name, poster, tags: titleTags})
                     });
                     showFlashMessage(`漫剧「${name}」已创建`);
@@ -967,7 +965,7 @@ function renderAdminPanel(adminPanelContainer) {
                 if (!oldName || !newName || !newPoster || newTags.length === 0) return;
 
                 try {
-                    await fetchJsonOrThrow(`/api/titles/${encodeURIComponent(oldName)}`, {
+                    await requestJsonApiOrThrow(`/api/titles/${encodeURIComponent(oldName)}`, {
                         method: 'PATCH', body: JSON.stringify({newName, poster: newPoster, tags: newTags})
                     });
                     showFlashMessage('漫剧信息修改成功');
@@ -990,7 +988,7 @@ function renderAdminPanel(adminPanelContainer) {
                 if (!confirm(`确认删除漫剧"${oldName}"？该漫剧下全部剧集会删除`)) return;
 
                 try {
-                    await fetchJsonOrThrow(`/api/titles/${encodeURIComponent(oldName)}`, {method: 'DELETE'});
+                    await requestJsonApiOrThrow(`/api/titles/${encodeURIComponent(oldName)}`, {method: 'DELETE'});
                     showFlashMessage('漫剧删除成功');
                     if (getCurrentRouteSeriesName() === oldName) history.replaceState({}, '', '/');
                     await bootstrapInitialSeriesData();
@@ -1087,7 +1085,7 @@ function renderAdminPanel(adminPanelContainer) {
             };
 
             try {
-                await fetchJsonOrThrow('/api/episodes', {method: 'POST', body: JSON.stringify(payload)});
+                await requestJsonApiOrThrow('/api/episodes', {method: 'POST', body: JSON.stringify(payload)});
                 if (getCurrentRouteSeriesName() === payload.titleName) {
                     uiState.selectedEpisode = payload.episodeNo;
                 }
@@ -1123,7 +1121,7 @@ function renderAdminPanel(adminPanelContainer) {
             };
 
             try {
-                const result = await fetchJsonOrThrow('/api/episodes/batch-directory', {
+                const result = await requestJsonApiOrThrow('/api/episodes/batch-directory', {
                     method: 'POST', body: JSON.stringify(payload)
                 });
                 const total = result.data?.total ?? 0;
@@ -1184,7 +1182,7 @@ function renderAdminPanel(adminPanelContainer) {
             if (!payload.titleName || Number.isNaN(payload.episodeNo) || Number.isNaN(payload.newEpisodeNo)) return;
 
             try {
-                await fetchJsonOrThrow('/api/episodes', {method: 'PATCH', body: JSON.stringify(payload)});
+                await requestJsonApiOrThrow('/api/episodes', {method: 'PATCH', body: JSON.stringify(payload)});
                 showFlashMessage('剧集信息修改成功');
                 await bootstrapInitialSeriesData();
             } catch (error) {
@@ -1216,7 +1214,7 @@ function renderAdminPanel(adminPanelContainer) {
             if (!confirm(`确认删除「${payload.titleName}」第${payload.episodeNo}集？`)) return;
 
             try {
-                await fetchJsonOrThrow('/api/episodes', {method: 'DELETE', body: JSON.stringify(payload)});
+                await requestJsonApiOrThrow('/api/episodes', {method: 'DELETE', body: JSON.stringify(payload)});
                 showFlashMessage('剧集删除成功');
                 await bootstrapInitialSeriesData();
             } catch (error) {
