@@ -39,8 +39,8 @@ CHINESE_DIGIT_MAP = {
 }
 
 
-def read_optional_env_var(name: str):
-    """读取环境变量并做 strip；空字符串按 None 处理。"""
+def get_normalized_env_var(name: str):
+    """读取环境变量并做strip，空字符串按None处理"""
     value = os.getenv(name)
     if value is None:
         return None
@@ -50,15 +50,15 @@ def read_optional_env_var(name: str):
 
 def build_database_dsn() -> str:
     """构建 PostgreSQL DSN，优先使用 DATABASE_URL。"""
-    database_url = read_optional_env_var('DATABASE_URL')
+    database_url = get_normalized_env_var('DATABASE_URL')
     if database_url:
         return database_url
 
-    host = read_optional_env_var('PGHOST') or '127.0.0.1'
-    port = read_optional_env_var('PGPORT') or '5432'
-    user = read_optional_env_var('PGUSER') or 'postgres'
-    password = read_optional_env_var('PGPASSWORD') or read_optional_env_var('POSTGRES_PASSWORD') or ''
-    database = read_optional_env_var('PGDATABASE') or 'video_preview'
+    host = get_normalized_env_var('PGHOST') or '127.0.0.1'
+    port = get_normalized_env_var('PGPORT') or '5432'
+    user = get_normalized_env_var('PGUSER') or 'postgres'
+    password = get_normalized_env_var('PGPASSWORD') or get_normalized_env_var('POSTGRES_PASSWORD') or ''
+    database = get_normalized_env_var('PGDATABASE') or 'video_preview'
 
     if password:
         return f"postgresql://{user}:{password}@{host}:{port}/{database}"
@@ -115,11 +115,11 @@ def is_http_or_https_url(value: str) -> bool:
 
 
 def load_oss_credentials():
-    access_key = read_optional_env_var('OSS_ACCESS_KEY')
-    secret_key = read_optional_env_var('OSS_SECRET_KEY')
-    endpoint = read_optional_env_var('OSS_ENDPOINT')
-    region = read_optional_env_var('OSS_REGION')
-    bucket_name = read_optional_env_var('OSS_BUCKET_NAME')
+    access_key = get_normalized_env_var('OSS_ACCESS_KEY')
+    secret_key = get_normalized_env_var('OSS_SECRET_KEY')
+    endpoint = get_normalized_env_var('OSS_ENDPOINT')
+    region = get_normalized_env_var('OSS_REGION')
+    bucket_name = get_normalized_env_var('OSS_BUCKET_NAME')
 
     missing = [
         name
@@ -150,11 +150,11 @@ def append_millisecond_timestamp_to_filename(path_obj: Path) -> str:
 
 
 def resolve_resource_to_url(value: str, name: str, local_path_kind: str = 'any'):
-    """将资源输入规范化为可访问 URL。
-
-    支持两类输入：
-    - 远程 URL：直接返回。
-    - 本地文件/目录：上传到对象存储后返回 URL（目录会返回 URL 列表）。
+    """
+    将资源输入规范化为可访问URL
+    支持两类输入:
+    - 远程URL: 直接返回
+    - 本地文件/目录: 上传到对象存储后返回URL(目录会返回URL列表)
     """
     normalized = value.strip()
     if is_http_or_https_url(normalized):
@@ -166,17 +166,6 @@ def resolve_resource_to_url(value: str, name: str, local_path_kind: str = 'any')
     endpoint = (endpoint or "").strip()
     region = (region or "").strip()
     bucket_name = (bucket_name or "").strip()
-
-    if not access_key:
-        raise ValueError("access_key 不能为空")
-    if not secret_key:
-        raise ValueError("secret_key 不能为空")
-    if not endpoint:
-        raise ValueError("endpoint 不能为空")
-    if not region:
-        raise ValueError("region 不能为空")
-    if not bucket_name:
-        raise ValueError("bucket_name 不能为空")
 
     try:
         path_obj = Path(normalized).expanduser().resolve(strict=True)
@@ -614,26 +603,28 @@ def api_tags_delete(tag_name):
 
 @flask_app.route('/api/titles', methods=['POST'])
 def api_titles_post():
-    """创建漫剧基础信息（名称、封面、标签）。"""
-    body = request.get_json(silent=True) or {}
-    if not is_non_empty_text(body.get('name')) or not is_non_empty_text(body.get('poster')):
-        return build_json_response(400, message='name 和 poster 不能为空')
+    """创建漫剧基础信息(名称、封面、标签)"""
+    request_json = request.get_json(silent=True) or {}
+    if not is_non_empty_text(request_json.get('name')):
+        return build_json_response(400, message='name不能为空')
+    if not is_non_empty_text(request_json.get('poster')):
+        return build_json_response(400, message='poster不能为空')
 
-    name = body['name'].strip()
+    title_name = request_json['name'].strip()
     try:
-        poster = resolve_resource_to_url(body['poster'], 'posters', local_path_kind='file')
-    except ValueError as exc:
-        return build_json_response(400, message=str(exc))
-    tags = [tag.strip() for tag in body.get('tags', []) if is_non_empty_text(tag)]
+        poster_url = resolve_resource_to_url(request_json['poster'], 'posters', local_path_kind='file')
+    except ValueError as resolve_error:
+        return build_json_response(400, message=str(resolve_error))
+    selected_tags = [tag_name.strip() for tag_name in request_json.get('tags', []) if is_non_empty_text(tag_name)]
 
     try:
-        with open_db_transaction() as conn, conn.cursor() as cur:
-            cur.execute('INSERT INTO title(name, cover_url) VALUES (%s, %s) RETURNING id', (name, poster))
-            title_id = cur.fetchone()['id']
-            bind_tags_to_title(conn, title_id, tags)
+        with open_db_connection() as db_connection, db_connection.cursor() as db_cursor:
+            db_cursor.execute('INSERT INTO title(name, cover_url) VALUES (%s, %s) RETURNING id', (title_name, poster_url))
+            created_title_id = db_cursor.fetchone()['id']
+            bind_tags_to_title(db_connection, created_title_id, selected_tags)
     except UniqueViolation:
-        return build_json_response(409, message='漫剧名称已存在')
-    return build_json_response(201, message='漫剧已创建')
+        return build_json_response(409, message=f'<{title_name}>漫剧名称已存在')
+    return build_json_response(201, message=f'<{title_name}>漫剧已创建')
 
 
 @flask_app.route('/api/titles/<path:title_name>', methods=['PATCH'])

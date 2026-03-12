@@ -178,10 +178,10 @@ function collectAvailableTags() {
 
 
 /**
- * 转义 HTML 特殊字符，防止字符串注入到模板时破坏 DOM 结构
+ * 转义HTML特殊字符，防止字符串注入到模板时破坏DOM结构
  *
  * @param {any} value - 待转义的值
- * @returns {string} 安全的 HTML 文本
+ * @returns {string} 安全的HTML文本
  */
 function escapeHtml(value) {
     return String(value)
@@ -260,7 +260,7 @@ function getEpisodeOptionsForSeries(titleName) {
 }
 
 /**
- * 渲染标签多选下拉 HTML。
+ * 渲染标签多选下拉HTML
  *
  * @param {string} fieldName - 表单字段名
  * @param {string[]} tags - 可选标签列表
@@ -270,23 +270,16 @@ function renderTagMultiSelectHtml(fieldName, tags, selectedTags = []) {
     if (!tags.length) {
         return '<div class="multi-select-empty">暂无可选标签</div>';
     }
-
     const selected = new Set(selectedTags);
     const selectedText = selected.size ? [...selected].map((tag) => escapeHtml(tag)).join('、') : '选择标签(可多选)';
-
     return `
-    <details class="multi-select" data-multi-select>
-      <summary class="multi-select-summary" data-multi-summary>${selectedText}</summary>
-      <div class="multi-select-list">
-        ${tags.map((tag) => `
-          <label class="multi-select-item">
-            <input type="checkbox" name="${fieldName}" value="${escapeHtml(tag)}" ${selected.has(tag) ? 'checked' : ''} />
-            <span>${escapeHtml(tag)}</span>
-          </label>
-        `).join('')}
-      </div>
-    </details>
-  `;
+<details class="multi-select" data-multi-select>
+    <summary class="multi-select-summary" data-multi-summary>${selectedText}</summary>
+    <div class="multi-select-list">
+        ${tags.map((tag) => `<label class="multi-select-item"><input type="checkbox" name="${fieldName}" value="${escapeHtml(tag)}" ${selected.has(tag) ? 'checked' : ''}/><span>${escapeHtml(tag)}</span></label>`).join('')}
+    </div>
+</details>
+    `;
 }
 
 /**
@@ -887,83 +880,94 @@ function renderAdminPanel(adminPanelContainer) {
     if (uiState.activeAdminTab === 'title') {
         const tags = collectAvailableTags();
         adminPanelContainer.innerHTML = `
-      <section class="admin-panel">
-        <div class="action-tabs">
-          <button type="button" class="admin-action-tab-button ${uiState.activeTitleAction === 'create' ? 'active' : ''}" data-title-action="create">新增漫剧</button>
-          <button type="button" class="admin-action-tab-button ${uiState.activeTitleAction === 'rename' ? 'active' : ''}" data-title-action="rename">修改漫剧</button>
-          <button type="button" class="admin-action-tab-button ${uiState.activeTitleAction === 'delete' ? 'active' : ''}" data-title-action="delete">删除漫剧</button>
-        </div>
-
-        <section class="action-panel ${uiState.activeTitleAction === 'create' ? '' : 'hidden'}">
-          <form id="title-create-form" class="stack-form">
-            <input name="name" required placeholder="漫剧名" />
-            <input name="poster" required placeholder="海报资源地址: 支持https://...或服务端本地绝对路径" />
+<section class="admin-panel">
+    <div class="action-tabs">
+        <button type="button" class="admin-action-tab-button ${uiState.activeTitleAction === 'create' ? 'active' : ''}"data-title-action="create">新增漫剧</button>
+        <button type="button" class="admin-action-tab-button ${uiState.activeTitleAction === 'rename' ? 'active' : ''}"data-title-action="rename">修改漫剧</button>
+        <button type="button" class="admin-action-tab-button ${uiState.activeTitleAction === 'delete' ? 'active' : ''}"data-title-action="delete">删除漫剧</button>
+    </div>
+    <section class="action-panel ${uiState.activeTitleAction === 'create' ? '' : 'hidden'}">
+        <form id="title-create-form" class="stack-form">
+            <input name="name" required placeholder="漫剧名"/>
+            <input name="poster" required placeholder="海报资源地址: 支持https://...或服务端本地绝对路径"/>
             ${renderTagMultiSelectHtml('tags', tags)}
             <p id="title-create-tags-error" class="field-error hidden" role="alert" aria-live="polite"></p>
             <button type="submit">新增</button>
-          </form>
-        </section>
+        </form>
+    </section>
 
-        <section class="action-panel ${uiState.activeTitleAction === 'rename' ? '' : 'hidden'}">
-          <form id="title-rename-form" class="stack-form">
+    <section class="action-panel ${uiState.activeTitleAction === 'rename' ? '' : 'hidden'}">
+        <form id="title-rename-form" class="stack-form">
             <select name="name" required>
-              <option value="">选择漫剧</option>
-              ${uiState.allSeries.map((series) => `<option value="${series.name}">${series.name}</option>`).join('')}
+                <option value="">选择漫剧</option>
+                ${uiState.allSeries.map((series) => `<option value="${series.name}">${series.name}</option>`).join('')}
             </select>
-            <input name="newName" required placeholder="漫剧名" />
-            <input name="newPoster" required placeholder="海报资源地址: 支持https://...或服务端本地绝对路径" />
+            <input name="newName" required placeholder="新漫剧名"/>
+            <input name="newPoster" required placeholder="新海报资源地址: 支持https://...或服务端本地绝对路径"/>
             ${renderTagMultiSelectHtml('newTags', tags)}
             <button type="submit">修改</button>
-          </form>
-        </section>
+        </form>
+    </section>
 
-        <section class="action-panel ${uiState.activeTitleAction === 'delete' ? '' : 'hidden'}">
-          <form id="title-delete-form" class="inline-form">
+    <section class="action-panel ${uiState.activeTitleAction === 'delete' ? '' : 'hidden'}">
+        <form id="title-delete-form" class="inline-form">
             <select name="name" required>
-              <option value="">选择漫剧</option>
-              ${uiState.allSeries.map((series) => `<option value="${series.name}">${series.name}</option>`).join('')}
+                <option value="">选择漫剧</option>
+                ${uiState.allSeries.map((series) => `<option value="${series.name}">${series.name}</option>`).join('')}
             </select>
             <button type="submit">删除</button>
-          </form>
-        </section>
-      </section>
-    `;
+        </form>
+    </section>
+</section>
+        `;
 
-        document.querySelectorAll('[data-title-action]').forEach((btn) => {
-            btn.onclick = () => {
-                uiState.activeTitleAction = btn.dataset.titleAction;
+        /**
+         * 给"新增/修改/删除"三个操作标签绑定点击事件
+         */
+        document.querySelectorAll('[data-title-action]').forEach((actionTabButton) => {
+            actionTabButton.onclick = () => {
+                uiState.activeTitleAction = actionTabButton.dataset.titleAction;
                 render();
             };
         });
 
+        // 绑定多选下拉框summary的交互逻辑，保证展开收起和显示文案正常工作
         bindMultiSelectSummaryEvents(adminPanelContainer);
 
         const titleCreateForm = document.getElementById('title-create-form');
         if (titleCreateForm) {
-            const tagsErrorNode = titleCreateForm.querySelector('#title-create-tags-error');
-            titleCreateForm.querySelectorAll('input[name="tags"]').forEach((checkbox) => {
-                checkbox.onchange = () => {
-                    validateMultiTagSelection(titleCreateForm, 'tags', tagsErrorNode, '请至少选择一个标签');
+            // 这个节点专门用于显示"标签至少选一个"这类校验错误信息
+            const tagsValidationMessageNode = titleCreateForm.querySelector('#title-create-tags-error');
+
+            // 只要标签勾选状态变化，就立刻重新校验并更新错误提示
+            titleCreateForm.querySelectorAll('input[name="tags"]').forEach((tagCheckbox) => {
+                tagCheckbox.onchange = () => {
+                    validateMultiTagSelection(titleCreateForm, 'tags', tagsValidationMessageNode, '请至少选择一个标签');
                 };
             });
 
-            titleCreateForm.onsubmit = async (event) => {
-                event.preventDefault();
-                const formData = new FormData(event.target);
-                const name = String(formData.get('name') || '').trim();
-                const poster = String(formData.get('poster') || '').trim();
-                const titleTags = formData
-                    .getAll('tags')
-                    .map((tag) => String(tag).trim())
-                    .filter(Boolean);
-                if (!validateMultiTagSelection(event.target, 'tags', tagsErrorNode, '请至少选择一个标签')) {
+            // 处理"新增漫剧"表单提交
+            titleCreateForm.onsubmit = async (submitEvent) => {
+                submitEvent.preventDefault();
+
+                // 从当前表单中提取并清洗用户输入的数据
+                const submittedFormData = new FormData(submitEvent.target);
+                const titleName = String(submittedFormData.get('name') || '').trim();
+                const poster = String(submittedFormData.get('poster') || '').trim();
+
+                // 收集所有已选标签，getAll会返回同名checkbox的全部选中值
+                const selectedTagNames = submittedFormData.getAll('tags').map((tagName) => String(tagName).trim()).filter(Boolean);
+
+                // 提交前再做一次兜底校验，防止用户未选择标签直接提交
+                if (!validateMultiTagSelection(submitEvent.target, 'tags', tagsValidationMessageNode, '请至少选择一个标签')) {
                     return;
                 }
                 try {
+                    // 把漫剧名称、海报地址、标签列表发给后端创建新漫剧
                     await requestJsonApiOrThrow('/api/titles', {
-                        method: 'POST', body: JSON.stringify({name, poster, tags: titleTags})
+                        method: 'POST', body: JSON.stringify({name: titleName, poster: poster, tags: selectedTagNames})
                     });
-                    showFlashMessage(`漫剧「${name}」已创建`);
+                    showFlashMessage(`漫剧[${titleName}]已创建`);
                     await refreshBaseDataAndRender();
                 } catch (error) {
                     showFlashMessage(error.message);
