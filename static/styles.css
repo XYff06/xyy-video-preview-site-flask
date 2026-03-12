@@ -101,6 +101,17 @@ body {
     width: 100%;
 }
 
+/*
+ * 通用主按钮样式
+ * border: 1px solid var(--color-accent-primary) - 使用主强调色作为按钮边框
+ * border-radius: 10px - 按钮四角圆角为10px，视觉上更柔和
+ * background: var(--color-accent-primary) - 使用主强调色作为按钮背景色
+ * color: #fff - 按钮文字使用白色，保证和深色背景有足够对比
+ * font-weight: 600 - 文字加粗，突出按钮的操作属性
+ * height: 40px - 按钮高度固定为40px
+ * padding: 0 16px - 上下内边距为0，左右内边距为16px
+ * cursor: pointer - 鼠标移入时显示手型，提示该元素可点击
+ */
 .primary-btn {
     border: 1px solid var(--color-accent-primary);
     border-radius: 10px;
@@ -112,6 +123,13 @@ body {
     cursor: pointer;
 }
 
+/*
+ * 管理入口按钮的尺寸补充样式
+ * width: 100% - 默认宽度占满所在容器
+ * max-width: 86px - 最大宽度限制为86px，避免按钮被拉得过宽
+ * height: 42px - 按钮高度固定为42px
+ * padding: 0 - 去掉额外内边距，方便严格控制按钮尺寸
+ */
 .manage-btn {
     width: 100%;
     max-width: 86px;
