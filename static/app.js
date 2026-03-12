@@ -79,29 +79,60 @@ async function requestJsonApiOrThrow(requestUrl, requestOptions = {}) {
  * 加载标签全集，供首页筛选与管理表单复用
  */
 async function loadTags() {
-    const payload = await requestJsonApiOrThrow('/api/tags');
-    uiState.allTags = payload.data;
+
 }
 
 /**
- * 初始化加载首页基础数据(漫剧 + 标签)，并触发首屏渲染
+ * 初始化加载首页基础数据(漫剧+标签)，并触发首屏渲染
  */
-async function bootstrapInitialSeriesData() {
-    // 初始化加载: 拉取漫剧和标签后，完成数据规范化并触发首屏渲染
+async function initializeAppDataAndRender() {
+    /**
+     * 这是应用启动后的第一轮基础数据初始化，目标是把漫剧列表和标签列表一起拉回来，整理成前端更好用的结构，再触发页面渲染
+     */
     try {
-        const [seriesPayload] = await Promise.all([requestJsonApiOrThrow('/api/series?page=1&pageSize=10000'), loadTags()]);
-        uiState.allSeries = seriesPayload.data.map((item) => ({
-            ...item, tags: new Set(item.tags), episodes: buildCanonicalEpisodeList(item.episodes || [])
+        /**
+         * Promise.all会并行发起两个请求:
+         * 1. 拉取全部漫剧数据
+         * 2. 拉取全部标签数据
+         * 这样比串行等待更快，因为两个请求可以同时进行
+         */
+        const [seriesListResponse, tagListResponse] = await Promise.all([
+            requestJsonApiOrThrow('/api/series?page=1&pageSize=10000'),
+            requestJsonApiOrThrow('/api/tags')
+        ]);
+        uiState.allTags = tagListResponse.data;
+        /**
+         * 后端返回的数据会在这里转换成前端更适合直接使用的结构:
+         * 1. tags转成Set，方便后续判断某个标签是否存在
+         * 2. episodes交给buildCanonicalEpisodeList做剧集规范化和去重
+         */
+        uiState.allSeries = seriesListResponse.data.map((seriesRecord) => ({
+            ...seriesRecord,
+            tags: new Set(seriesRecord.tags),
+            episodes: buildCanonicalEpisodeList(seriesRecord.episodes || [])
         }));
+
+        // 走到这里说明初始化成功:
+        // - 关闭全局 loading 状态
+        // - 清空之前可能残留的错误信息
         uiState.loading = false;
         uiState.error = null;
     } catch (error) {
+        // 任意一个请求失败都会进入这里。
+        // 这里不再保留 loading，而是把错误信息存进 uiState，
+        // 后面的 render() 会根据 uiState.error 渲染失败提示。
         uiState.loading = false;
         uiState.error = error.message;
     }
 
+    // 无论成功还是失败，都统一调用 render()。
+    // 成功时会渲染正常页面，失败时会渲染错误提示。
     render();
 
+    // 如果当前 URL 不是某个漫剧详情页，而是首页，
+    // 还要继续加载“首页分页列表数据”。
+    // 原因是 allSeries 是一次性拉回来的全量基础数据，
+    // 而首页展示用的是另一套支持分页、筛选、排序的接口结果。
     if (!getCurrentRouteSeriesName()) {
         await loadHomePageSeriesData();
     }
@@ -768,7 +799,7 @@ function renderAdminPanel(adminPanelContainer) {
                         method: 'POST', body: JSON.stringify({tagName: createdTagName})
                     });
                     showFlashMessage(`标签[${createdTagName}]已创建`);
-                    await bootstrapInitialSeriesData();
+                    await initializeAppDataAndRender();
                 } catch (error) {
                     showFlashMessage(error.message);
                     render();
@@ -806,7 +837,7 @@ function renderAdminPanel(adminPanelContainer) {
                     // 如果首页当前正筛选的是旧标签，这里要同步切到新标签名，
                     // 否则刷新后会出现“筛选值已不存在”的状态不一致问题。
                     if (uiState.selectedTag === originalTagName) uiState.selectedTag = updatedTagName;
-                    await bootstrapInitialSeriesData();
+                    await initializeAppDataAndRender();
                 } catch (error) {
                     showFlashMessage(error.message);
                     render();
@@ -831,7 +862,7 @@ function renderAdminPanel(adminPanelContainer) {
                     showFlashMessage('标签删除成功');
                     // 被删标签如果正处于首页筛选中，需要清空筛选条件。
                     if (uiState.selectedTag === deletedTagName) uiState.selectedTag = null;
-                    await bootstrapInitialSeriesData();
+                    await initializeAppDataAndRender();
                 } catch (error) {
                     showFlashMessage(error.message);
                     render();
@@ -921,7 +952,7 @@ function renderAdminPanel(adminPanelContainer) {
                         method: 'POST', body: JSON.stringify({name, poster, tags: titleTags})
                     });
                     showFlashMessage(`漫剧「${name}」已创建`);
-                    await bootstrapInitialSeriesData();
+                    await initializeAppDataAndRender();
                 } catch (error) {
                     showFlashMessage(error.message);
                     render();
@@ -970,7 +1001,7 @@ function renderAdminPanel(adminPanelContainer) {
                     });
                     showFlashMessage('漫剧信息修改成功');
                     if (getCurrentRouteSeriesName() === oldName) history.replaceState({}, '', `/${encodeURIComponent(newName)}`);
-                    await bootstrapInitialSeriesData();
+                    await initializeAppDataAndRender();
                 } catch (error) {
                     showFlashMessage(error.message);
                     render();
@@ -991,7 +1022,7 @@ function renderAdminPanel(adminPanelContainer) {
                     await requestJsonApiOrThrow(`/api/titles/${encodeURIComponent(oldName)}`, {method: 'DELETE'});
                     showFlashMessage('漫剧删除成功');
                     if (getCurrentRouteSeriesName() === oldName) history.replaceState({}, '', '/');
-                    await bootstrapInitialSeriesData();
+                    await initializeAppDataAndRender();
                 } catch (error) {
                     showFlashMessage(error.message);
                     render();
@@ -1090,7 +1121,7 @@ function renderAdminPanel(adminPanelContainer) {
                     uiState.selectedEpisode = payload.episodeNo;
                 }
                 showFlashMessage('剧集新增成功');
-                await bootstrapInitialSeriesData();
+                await initializeAppDataAndRender();
             } catch (error) {
                 showFlashMessage(error.message);
                 render();
@@ -1131,7 +1162,7 @@ function renderAdminPanel(adminPanelContainer) {
                 if (getCurrentRouteSeriesName() === payload.name) {
                     uiState.selectedEpisode = 1;
                 }
-                await bootstrapInitialSeriesData();
+                await initializeAppDataAndRender();
             } catch (error) {
                 showFlashMessage(error.message);
                 render();
@@ -1184,7 +1215,7 @@ function renderAdminPanel(adminPanelContainer) {
             try {
                 await requestJsonApiOrThrow('/api/episodes', {method: 'PATCH', body: JSON.stringify(payload)});
                 showFlashMessage('剧集信息修改成功');
-                await bootstrapInitialSeriesData();
+                await initializeAppDataAndRender();
             } catch (error) {
                 showFlashMessage(error.message);
                 render();
@@ -1216,7 +1247,7 @@ function renderAdminPanel(adminPanelContainer) {
             try {
                 await requestJsonApiOrThrow('/api/episodes', {method: 'DELETE', body: JSON.stringify(payload)});
                 showFlashMessage('剧集删除成功');
-                await bootstrapInitialSeriesData();
+                await initializeAppDataAndRender();
             } catch (error) {
                 showFlashMessage(error.message);
                 render();
@@ -1233,4 +1264,4 @@ window.addEventListener('popstate', () => {
     loadHomePageSeriesData();
 });
 render();
-bootstrapInitialSeriesData();
+initializeAppDataAndRender();

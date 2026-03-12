@@ -566,10 +566,10 @@ def api_series():
 
 @flask_app.route('/api/tags', methods=['GET'])
 def api_tags_get():
-    with open_db_connection() as conn, conn.cursor() as cur:
-        cur.execute('SELECT tag_name FROM tag ORDER BY sort_no ASC, tag_name ASC')
-        rows = cur.fetchall()
-    return build_json_response(200, data=[row['tag_name'] for row in rows])
+    with open_db_connection() as db_connection, db_connection.cursor() as db_cursor:
+        db_cursor.execute('SELECT tag_name FROM tag ORDER BY sort_no ASC, tag_name ASC')
+        tag_rows = db_cursor.fetchall()
+    return build_json_response(200, data=[tag_row['tag_name'] for tag_row in tag_rows])
 
 
 @flask_app.route('/api/tags', methods=['POST'])
