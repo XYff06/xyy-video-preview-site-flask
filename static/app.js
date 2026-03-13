@@ -488,9 +488,9 @@ function renderHome(container) {
     const homePage = container.querySelector('.home-page');
 
     const searchBar = document.createElement('section');
-    searchBar.className = 'home-search-bar';
+    searchBar.className = 'home-toolbar';
     searchBar.innerHTML = `
-    <form id="global-search-form" class="search-form">
+    <form id="global-search-form" class="toolbar">
       <input id="global-search" class="global-search" type="search" placeholder="全局搜索：输入漫剧名称" value="${escapeHtml(uiState.searchQuery)}" />
         <button type="submit" class="primary-button search-btn">搜索</button>
       <select id="global-sort" class="global-sort" aria-label="排序依据">

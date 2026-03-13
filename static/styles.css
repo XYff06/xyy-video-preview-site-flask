@@ -255,19 +255,19 @@ body {
 }
 
 /*
- * 首页搜索栏外层
- * margin-bottom: 12px，让搜索区和后续内容保持间距
+ * home-toolbar外层
+ * margin-bottom: 12px，让toolbar与后续内容保持间距
  */
-.home-search-bar {
+.home-toolbar {
     margin-bottom: 12px;
 }
 
 /*
- * 搜索表单布局
- * display: flex，横向排列输入框 排序框和搜索按钮
+ * toolbar布局
+ * display: flex，横向排列输入框、搜索按钮和排序框
  * gap: 10px，控制各个表单项之间的间距
  */
-.search-form {
+.toolbar {
     display: flex;
     gap: 10px;
 }
