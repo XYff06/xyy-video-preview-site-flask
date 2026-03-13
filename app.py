@@ -626,16 +626,21 @@ def api_titles_post():
         return build_json_response(400, message='poster不能为空')
 
     title_name = request_json['name'].strip()
-    try:
-        poster_url = resolve_resource_to_url(request_json['poster'], title_name, local_path_kind='file')
-    except ValueError as resolve_error:
-        return build_json_response(400, message=str(resolve_error))
     selected_tags = [tag_name.strip() for tag_name in request_json.get('tags', []) if is_non_empty_text(tag_name)]
 
     try:
-        with open_db_connection() as db_connection, db_connection.cursor() as db_cursor:
-            db_cursor.execute('INSERT INTO title(name, cover_url) VALUES (%s, %s) RETURNING id', (title_name, poster_url))
+        with open_db_transaction() as db_connection, db_connection.cursor() as db_cursor:
+            db_cursor.execute('INSERT INTO title(name, cover_url) VALUES (%s, %s) RETURNING id', (title_name, '__pending__'))
             created_title_id = db_cursor.fetchone()['id']
+            try:
+                poster_url = resolve_resource_to_url(
+                    request_json['poster'],
+                    str(created_title_id),
+                    local_path_kind='file',
+                )
+            except ValueError as resolve_error:
+                return build_json_response(400, message=str(resolve_error))
+            db_cursor.execute('UPDATE title SET cover_url = %s WHERE id = %s', (poster_url, created_title_id))
             bind_tags_to_title(db_connection, created_title_id, selected_tags)
     except UniqueViolation:
         return build_json_response(409, message=f'<{title_name}>漫剧名称已存在')
@@ -649,10 +654,6 @@ def api_titles_patch(title_name):
         return build_json_response(400, message='newName、poster、tags 参数不完整')
 
     new_name = body['newName'].strip()
-    try:
-        poster = resolve_resource_to_url(body['poster'], new_name, local_path_kind='file')
-    except ValueError as exc:
-        return build_json_response(400, message=str(exc))
     tags = [tag.strip() for tag in body['tags'] if is_non_empty_text(tag)]
     if not tags:
         return build_json_response(400, message='tags 至少需要一个标签')
@@ -664,6 +665,10 @@ def api_titles_patch(title_name):
             if not row:
                 return build_json_response(404, message='漫剧不存在')
             title_id = row['id']
+            try:
+                poster = resolve_resource_to_url(body['poster'], str(title_id), local_path_kind='file')
+            except ValueError as exc:
+                return build_json_response(400, message=str(exc))
             cur.execute('UPDATE title SET name = %s, cover_url = %s WHERE id = %s', (new_name, poster, title_id))
             bind_tags_to_title(conn, title_id, tags)
     except UniqueViolation:
@@ -695,38 +700,40 @@ def api_episodes_batch_directory():
         return build_json_response(400, message='tags 至少需要一个标签')
 
     try:
-        poster = resolve_resource_to_url(poster, name, local_path_kind='file')
-        normalized_directory = resolve_resource_to_url(directory_url, name, local_path_kind='dir')
-    except ValueError as exc:
-        return build_json_response(400, message=str(exc))
-    if isinstance(normalized_directory, list):
-        parsed_episodes = extract_episode_links_from_url_list(normalized_directory)
-    else:
-        parsed = urlparse(normalized_directory)
-        if parsed.scheme not in {'http', 'https'} or not parsed.netloc:
-            return build_json_response(400, message='directoryUrl 不是合法 URL')
-
-        response = requests.get(normalized_directory, timeout=20)
-        if response.status_code >= 400:
-            return build_json_response(400, message=f'读取目录失败：HTTP {response.status_code}')
-        content_type = response.headers.get('content-type', '')
-        if not re.search(r'text/html|application/xhtml\+xml', content_type, re.I):
-            return build_json_response(400, message='目录地址返回的不是 HTML 页面，无法解析视频列表')
-
-        parsed_episodes = extract_episode_links_from_directory_html(response.text, normalized_directory)
-    if not parsed_episodes:
-        return build_json_response(400, message='目录中未识别到可导入的视频文件。请确认链接可直接访问且文件名包含集号（如第1集/第一集/EP01）。')
-
-    try:
         with open_db_transaction() as conn, conn.cursor() as cur:
             cur.execute('SELECT id FROM title WHERE name = %s', (name,))
             existing = cur.fetchone()
             if existing:
                 title_id = existing['id']
-                cur.execute('UPDATE title SET cover_url = %s WHERE id = %s', (poster, title_id))
             else:
-                cur.execute('INSERT INTO title(name, cover_url) VALUES (%s, %s) RETURNING id', (name, poster))
+                cur.execute('INSERT INTO title(name, cover_url) VALUES (%s, %s) RETURNING id', (name, '__pending__'))
                 title_id = cur.fetchone()['id']
+
+            try:
+                prefix = str(title_id)
+                poster = resolve_resource_to_url(poster, prefix, local_path_kind='file')
+                normalized_directory = resolve_resource_to_url(directory_url, prefix, local_path_kind='dir')
+            except ValueError as exc:
+                return build_json_response(400, message=str(exc))
+            if isinstance(normalized_directory, list):
+                parsed_episodes = extract_episode_links_from_url_list(normalized_directory)
+            else:
+                parsed = urlparse(normalized_directory)
+                if parsed.scheme not in {'http', 'https'} or not parsed.netloc:
+                    return build_json_response(400, message='directoryUrl 不是合法 URL')
+
+                response = requests.get(normalized_directory, timeout=20)
+                if response.status_code >= 400:
+                    return build_json_response(400, message=f'读取目录失败：HTTP {response.status_code}')
+                content_type = response.headers.get('content-type', '')
+                if not re.search(r'text/html|application/xhtml\+xml', content_type, re.I):
+                    return build_json_response(400, message='目录地址返回的不是 HTML 页面，无法解析视频列表')
+
+                parsed_episodes = extract_episode_links_from_directory_html(response.text, normalized_directory)
+            if not parsed_episodes:
+                return build_json_response(400, message='目录中未识别到可导入的视频文件。请确认链接可直接访问且文件名包含集号（如第1集/第一集/EP01）。')
+
+            cur.execute('UPDATE title SET cover_url = %s WHERE id = %s', (poster, title_id))
 
             cur.execute('SELECT id, tag_name FROM tag WHERE tag_name = ANY(%s)', (tags,))
             tag_rows = cur.fetchall()
@@ -791,12 +798,6 @@ def api_episodes_post():
 
     if not title_name or episode_no is None or not raw_video_url:
         return build_json_response(400, message='参数不完整')
-    try:
-        video_url = resolve_resource_to_url(raw_video_url, title_name, local_path_kind='file')
-    except ValueError as exc:
-        return build_json_response(400, message=str(exc))
-    if isinstance(video_url, list):
-        return build_json_response(400, message='videoUrl 必须是单个视频资源地址，不能是目录')
 
     if episode_no <= 0:
         return build_json_response(400, message='集号必须大于0')
@@ -806,6 +807,16 @@ def api_episodes_post():
         title_row = cur.fetchone()
         if not title_row:
             return build_json_response(404, message='漫剧不存在')
+        try:
+            video_url = resolve_resource_to_url(
+                raw_video_url,
+                str(title_row['id']),
+                local_path_kind='file',
+            )
+        except ValueError as exc:
+            return build_json_response(400, message=str(exc))
+        if isinstance(video_url, list):
+            return build_json_response(400, message='videoUrl 必须是单个视频资源地址，不能是目录')
         try:
             cur.execute('INSERT INTO episode(title_id, episode_no, episode_url) VALUES (%s, %s, %s)', (title_row['id'], episode_no, video_url))
         except UniqueViolation:
@@ -828,16 +839,24 @@ def api_episodes_patch():
 
     if not title_name or source_no is None or target_no is None or not raw_video_url:
         return build_json_response(400, message='参数不完整')
-    try:
-        video_url = resolve_resource_to_url(raw_video_url, title_name, local_path_kind='file')
-    except ValueError as exc:
-        return build_json_response(400, message=str(exc))
-    if isinstance(video_url, list):
-        return build_json_response(400, message='videoUrl 必须是单个视频资源地址，不能是目录')
     if source_no <= 0 or target_no <= 0:
         return build_json_response(400, message='集号必须大于0')
 
     with open_db_transaction() as conn, conn.cursor() as cur:
+        cur.execute('SELECT id FROM title WHERE name = %s', (title_name,))
+        title_row = cur.fetchone()
+        if not title_row:
+            return build_json_response(404, message='漫剧不存在')
+        try:
+            video_url = resolve_resource_to_url(
+                raw_video_url,
+                str(title_row['id']),
+                local_path_kind='file',
+            )
+        except ValueError as exc:
+            return build_json_response(400, message=str(exc))
+        if isinstance(video_url, list):
+            return build_json_response(400, message='videoUrl 必须是单个视频资源地址，不能是目录')
         try:
             cur.execute(
                 '''
