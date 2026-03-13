@@ -492,7 +492,7 @@ function renderHome(container) {
     searchBar.innerHTML = `
     <form id="global-search-form" class="toolbar">
       <input id="global-search" class="global-search" type="search" placeholder="全局搜索：输入漫剧名称" value="${escapeHtml(uiState.searchQuery)}" />
-        <button type="submit" class="primary-button search-btn">搜索</button>
+        <button type="submit" class="primary-button search-button">搜索</button>
       <select id="global-sort" class="global-sort" aria-label="排序依据">
         <option value="updated_desc" ${uiState.sortBy === 'updated_desc' ? 'selected' : ''}>最后更新时间(倒序)</option>
         <option value="updated_asc" ${uiState.sortBy === 'updated_asc' ? 'selected' : ''}>最后更新时间(顺序)</option>

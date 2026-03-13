@@ -295,7 +295,7 @@ body {
 
 /*
  * 排序下拉框
- * min-width: 250px，避免选项文字把控件压得过窄
+ * min-width: 200px，避免选项文字把控件压得过窄
  * height: 50px，和搜索输入框保持同高
  * border-radius: 0，保留下拉框更偏直角的视觉区分
  * background: #fff，保持控件背景清晰
@@ -308,7 +308,7 @@ body {
     font-size: 15px;
     color: #2a3040;
     background: #fff;
-    min-width: 250px;
+    min-width: 200px;
 }
 
 .global-sort:focus {
@@ -318,12 +318,12 @@ body {
 
 /*
  * 搜索按钮
- * height: 50px，和输入框 下拉框保持同一高度
+ * height: 50px，和输入框、下拉框保持同一高度
  * min-width: 96px，保证按钮文案不会被压缩
  * padding: 0 22px，增强按钮横向留白
  * border-radius: 999px，保持和搜索框一致的圆润风格
  */
-.search-btn {
+.search-button {
     height: 50px;
     min-width: 96px;
     padding: 0 22px;
