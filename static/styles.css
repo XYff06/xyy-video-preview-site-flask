@@ -1,7 +1,8 @@
 /*
  * 全局样式表
- * - 使用语义化设计令牌(color-*)统一维护颜色
- * - 按页面结构分区: 布局、首页、详情、管理弹窗、响应式
+ *
+ * 按布局 首页 详情页 管理弹窗和响应式分区组织
+ * 颜色和基础文字样式统一收敛到 root 设计令牌
  */
 :root {
     --color-page-background: #eff1f4;
@@ -13,23 +14,20 @@
     font-family: "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
 }
 
-/* 所有元素统一使用border-box盒模型，宽高计算更直观 */
+/* 统一使用 border-box 盒模型 让宽高计算更稳定 */
 * {
     box-sizing: border-box;
 }
 
-/* 页面基础样式: 去掉浏览器默认留白，并设置全站默认背景色和文字色 */
+/* 页面基础样式
+   去掉默认留白并设置全站背景和文字颜色 */
 body {
     margin: 0;
     background: var(--color-page-background);
     color: var(--color-text-primary);
 }
 
-/*
- * width: 100vw - 宽度占满整个视口
- * min-height: 100vh - 最小高度占满整个视口
- * padding: 0 - 内部没有默认内边距
- */
+/* 应用挂载节点始终铺满整个视口 */
 .app {
     width: 100vw;
     min-height: 100vh;
@@ -38,13 +36,10 @@ body {
 
 /*
  * 三栏主布局容器
- * display: grid - 使用CSS网格布局，方便把页面分成左中右三列
- * grid-template-columns: clamp(120px, 9vw, 175px) minmax(0, 1fr) clamp(90px, 5vw, 120px)
- *   - 第1列: 左侧栏宽度自适应，最小120px，理想值为视口宽度的9%，最大175px
- *   - 第2列: 中间内容区占据剩余空间，最小可压缩到0，避免内容把布局撑坏
- *   - 第3列: 右侧栏宽度自适应，最小90px，理想值为视口宽度的5%，最大120px
- * width: 100% - 容器宽度占满父元素
- * min-height: 100vh - 容器最小高度至少撑满整个浏览器可视区域
+ *
+ * 左侧预留返回和筛选区域
+ * 中间承载页面主体
+ * 右侧预留管理入口
  */
 .layout-shell {
     display: grid;
@@ -53,65 +48,36 @@ body {
     min-height: 100vh;
 }
 
-/*
- * 左右两侧栏的通用内层容器
- * min-width: 0 - 允许网格子项在空间不足时继续收缩，避免内容把父布局撑宽
- * padding: 22px 10px 40px - 设置内边距，上22px、左右10px、下40px
- */
+/* 左右两侧栏共用的内边距和收缩规则 */
 .side-rail {
     min-width: 0;
     padding: 22px 10px 40px;
 }
 
-/*
- * 左侧栏布局
- * display: flex - 使用弹性布局，便于控制内部元素对齐方式
- * justify-content: center - 让左侧栏中的内容在水平方向居中
- */
+/* 左侧栏负责承载返回按钮和顶部辅助区域 */
 .left-rail {
     display: flex;
     justify-content: center;
 }
 
-/*
- * 右侧栏布局
- * display: flex - 使用弹性布局，便于控制内部元素对齐方式
- * justify-content: center - 让右侧栏中的内容在水平方向居中
- */
+/* 右侧栏负责承载管理入口按钮 */
 .right-rail {
     display: flex;
     justify-content: center;
 }
 
-/*
- * 中间主内容区容器
- * min-width: 0 - 允许内容区在网格布局中正常收缩，避免内容溢出把整体撑宽
- * padding: 22px 16px 40px - 设置内边距，上22px、左右16px、下40px
- */
+/* 中间主内容区负责承载首页 详情页和闪现提示 */
 .content-shell {
     min-width: 0;
     padding: 22px 16px 40px;
 }
 
-/*
- * 顶部左侧区域容器
- * width: 100% - 宽度占满父容器，方便内部元素按整行宽度布局
- */
+/* 左上角占位容器 由不同页面动态填入按钮或留空 */
 #top-row-left {
     width: 100%;
 }
 
-/*
- * 通用主按钮样式
- * border: 1px solid var(--color-accent-primary) - 使用主强调色作为按钮边框
- * border-radius: 10px - 按钮四角圆角为10px，视觉上更柔和
- * background: var(--color-accent-primary) - 使用主强调色作为按钮背景色
- * color: #fff - 按钮文字使用白色，保证和深色背景有足够对比
- * font-weight: 600 - 文字加粗，突出按钮的操作属性
- * height: 40px - 按钮高度固定为40px
- * padding: 0 16px - 上下内边距为0，左右内边距为16px
- * cursor: pointer - 鼠标移入时显示手型，提示该元素可点击
- */
+/* 通用主按钮样式 管理入口和搜索操作都会复用 */
 .primary-btn {
     border: 1px solid var(--color-accent-primary);
     border-radius: 10px;
@@ -123,13 +89,7 @@ body {
     cursor: pointer;
 }
 
-/*
- * 管理入口按钮的尺寸补充样式
- * width: 100% - 默认宽度占满所在容器
- * max-width: 86px - 最大宽度限制为86px，避免按钮被拉得过宽
- * height: 42px - 按钮高度固定为42px
- * padding: 0 - 去掉额外内边距，方便严格控制按钮尺寸
- */
+/* 管理入口按钮在侧栏里的专用尺寸 */
 .manage-btn {
     width: 100%;
     max-width: 86px;
@@ -169,7 +129,7 @@ body {
     padding: 2px 4px;
 }
 
-/* 首页标签区 */
+/* 首页标签筛选区 */
 .top-categories {
     display: grid;
     grid-template-columns: 1fr;
@@ -395,7 +355,7 @@ body {
     padding: 10px 8px;
 }
 
-/* 详情页：剧集分页切换器 */
+/* 详情页剧集分页切换器 */
 .episode-switcher {
     display: grid;
     grid-template-columns: 44px minmax(0, 1fr) 44px;
@@ -649,6 +609,9 @@ body {
     padding: 8px 10px;
 }
 
+/* 多选标签组件
+   summary 负责展示已选结果
+   展开后列表负责承载所有可选标签 */
 .multi-select {
     width: 100%;
     border: 1px solid var(--color-border-default);
@@ -742,6 +705,9 @@ body {
     margin-top: -4px;
 }
 
+/* 响应式规则
+   第一组主要压缩首页和弹窗布局
+   第二组把三栏布局折叠成单列 */
 @media (max-width: 1080px) {
     .top-row {
         flex-direction: column;

@@ -1,10 +1,9 @@
 /**
  * 前端单页应用入口
  *
- * 职责说明:
- * 1) 维护统一的UI状态树(uiState)
- * 2) 通过REST API与后端通信
- * 3) 渲染首页、详情页、管理弹窗并绑定交互事件
+ * 负责维护统一状态
+ * 负责和后端 API 通信
+ * 负责渲染首页 详情页和管理弹窗
  */
 
 /**
@@ -18,36 +17,37 @@ const formatDateTimeZhCN = (iso) => new Date(iso).toLocaleString('zh-CN', {hour1
 /**
  * 全局页面状态容器
  *
- * 说明: 集中管理首页、详情页与管理弹窗的UI状态，避免散落的全局变量
+ * 首页 详情页和管理弹窗的状态都集中存放在这里
+ * 渲染函数只读取 uiState 决定当前页面应该显示什么
  */
 const uiState = {
-    allSeries: [], // 全量漫剧数据(含剧集列表)
-    allTags: [], // 标签全集(来自后端/api/tags)
-    selectedTag: null, // 首页当前选中的标签，null表示"全部"
+    allSeries: [], // 全量漫剧数据 这里保留完整剧集列表
+    allTags: [], // 标签全集 优先使用后端独立返回的数据
+    selectedTag: null, // 首页当前选中的标签 null 表示全部
     searchQuery: '', // 首页搜索关键字
     sortBy: 'updated_desc', // 首页排序方式
     currentPage: 1, // 首页当前页码
     pageSize: 25, // 首页每页条数
-    homeSeries: [], // 当前筛选条件下的首页列表数据
+    homeSeries: [], // 当前筛选条件下的首页结果
     homeTotal: 0, // 当前筛选条件下的总条数
-    homeLoading: false, // 首页列表加载状态
-    homeError: null, // 首页列表错误信息
-    selectedEpisode: null, // 详情页当前选中的剧集集号
-    episodePage: 1, // 详情页剧集标签分页的当前页
-    episodePageSize: 10, // 详情页剧集标签分页大小
+    homeLoading: false, // 首页分页结果是否正在加载
+    homeError: null, // 首页分页结果的错误信息
+    selectedEpisode: null, // 详情页当前选中的集号
+    episodePage: 1, // 详情页剧集分页的当前页
+    episodePageSize: 10, // 详情页每页展示多少个剧集按钮
     activeDetailSeriesName: '', // 当前详情页正在展示的漫剧名称
     tagExpanded: false, // 首页标签栏是否展开更多项
-    loading: true, // 首屏初始化加载状态
-    error: null, // 首屏初始化错误信息
-    activeAdminTab: 'tag', // 管理弹窗当前主Tab(tag/title/episode)
-    adminModalOpen: false, // 管理弹窗开关状态
+    loading: true, // 首屏基础数据是否还在加载
+    error: null, // 首屏基础数据加载失败时的错误信息
+    activeAdminTab: 'tag', // 管理弹窗当前主分区
+    adminModalOpen: false, // 管理弹窗是否打开
     flashMessage: '', // 顶部闪现提示文案
     flashAutoCloseTimeout: null, // 闪现提示自动关闭定时器句柄
-    flashVersion: 0, // 闪现提示版本号(用于控制重复计时)
-    renderedFlashVersion: 0, // 已经渲染过的闪现提示版本号
-    activeTagAction: 'create', // 标签管理子动作(create/rename/delete)
-    activeTitleAdminAction: 'create', // 漫剧管理子动作(create/rename/delete)
-    activeEpisodeAdminAction: 'create' // 剧集管理子动作(create/batch/rename/delete)
+    flashVersion: 0, // 闪现提示版本号 用来区分是不是新提示
+    renderedFlashVersion: 0, // 当前界面已经处理过的提示版本号
+    activeTagAction: 'create', // 标签管理当前子操作
+    activeTitleAdminAction: 'create', // 漫剧管理当前子操作
+    activeEpisodeAdminAction: 'create' // 剧集管理当前子操作
 };
 
 /**
@@ -76,20 +76,24 @@ async function requestJsonApiOrThrow(requestUrl, requestOptions = {}) {
 }
 
 /**
- * 拉取漫剧和标签基础数据，更新全局状态，并重新渲染页面
+ * 刷新漫剧和标签基础数据
+ *
+ * 成功后会更新 uiState 并重新渲染
+ * 如果当前在首页 还会继续补拉首页自己的分页结果
  */
 async function reloadBaseDataAndRender() {
     try {
         /**
          * 并发拉取漫剧列表和标签列表
-         * 两份基础数据都到齐后再一起写入uiState，避免页面只更新一半
+         * 两份数据都返回后再一起写入状态
+         * 这样页面不会出现只更新一半的中间态
          */
         const [seriesListResponse, tagListResponse] = await Promise.all([requestJsonApiOrThrow('/api/series?page=1&pageSize=10000'), requestJsonApiOrThrow('/api/tags')]);
         uiState.allTags = tagListResponse.data;
         /**
-         * 后端返回的漫剧记录会在这里做一次前端侧归一化:
-         * 1. tags转成Set，后面判断标签包含关系时不需要反复遍历数组
-         * 2. episodes交给normalizeEpisodeRecords，统一做去重、集号规范化和排序
+         * 这里会把后端返回的数据再做一次前端侧归一化
+         * tags 转成 Set 便于后面快速判断是否包含某个标签
+         * episodes 交给 normalizeEpisodeRecords 统一去重 排序和集号格式
          */
         uiState.allSeries = seriesListResponse.data.map((seriesRecord) => ({
             ...seriesRecord,
@@ -98,24 +102,28 @@ async function reloadBaseDataAndRender() {
         }));
 
         /**
-         * 走到这里说明基础数据刷新成功，关闭全局loading状态，清空之前可能残留的错误信息
+         * 基础数据刷新成功后
+         * 关闭全局 loading 状态并清空旧错误
          */
         uiState.loading = false;
         uiState.error = null;
     } catch (error) {
         /**
-         * 任意一个请求失败都会进入这里，关闭全局loading状态，把错误信息存进uiState.error，后面的render()会根据错误状态渲染失败提示
+         * 任意一个请求失败都会进入这里
+         * render 会根据 uiState.error 渲染失败提示
          */
         uiState.loading = false;
         uiState.error = error.message;
     }
     /**
-     * 无论成功还是失败，都统一调用render()，成功时渲染正常页面，失败时渲染错误提示
+     * 无论成功还是失败都先走一次 render
+     * 这样当前界面会立即反映新的全局状态
      */
     render();
 
     /**
-     * 如果当前不是漫剧详情页，而是首页，还需要继续加载首页自己的分页列表数据，因为allSeries是全量基础数据，首页展示列表使用的是另一套支持分页、筛选、排序的结果
+     * 首页展示列表使用的是另一套带分页的查询结果
+     * 所以首页场景还需要继续补拉一次首页专用数据
      */
     if (!getCurrentRouteSeriesName()) {
         await loadHomeSeriesPageData();
@@ -123,14 +131,18 @@ async function reloadBaseDataAndRender() {
 }
 
 /**
- * 按当前筛选、搜索、排序和分页条件加载首页列表
+ * 按当前筛选条件加载首页列表
+ *
+ * 这一步只更新首页列表相关状态
+ * 不会覆盖前面拉回来的全量基础数据
  */
 async function loadHomeSeriesPageData() {
     uiState.homeLoading = true;
     uiState.homeError = null;
     render();
 
-    // 只把当前真正生效的筛选条件写进查询参数，避免发送无意义的空字段
+    // 只把当前真正生效的筛选条件写进查询参数
+    // 这样可以避免发送无意义的空字段
     const params = new URLSearchParams();
     params.set('page', String(uiState.currentPage));
     params.set('pageSize', String(uiState.pageSize));
@@ -158,20 +170,23 @@ async function loadHomeSeriesPageData() {
 }
 
 /**
- * 获取标签列表
- * 优先使用后端标签全集，缺失时从漫剧数据反推
+ * 获取当前可用的标签列表
+ *
+ * 优先使用后端独立返回的标签全集
+ * 缺失时再从漫剧数据里反推
  *
  * @returns {string[]} 排序后的标签列表
  */
 function collectAvailableTags() {
     /**
-     * 如果后端已经单独返回过完整标签列表uiState.allTags，就直接用它
-     * [...uiState.allTags]会复制一份数组再返回，避免外部直接改动原始状态
+     * 如果 uiState.allTags 已经有值就直接使用
+     * 这里复制一份数组返回 避免外部直接改写原始状态
      */
     if (uiState.allTags.length) return [...uiState.allTags];
     /**
-     * 如果allTags还没有数据，就从所有漫剧里临时推导标签列表
-     * flatMap会先把每个漫剧里的Set展开成数组，再交给Set统一去重
+     * 兜底场景会从全部漫剧里临时推导标签列表
+     * flatMap 会先把每个漫剧里的标签展开
+     * 外层 Set 再把重复标签去掉
      */
     return [...new Set(uiState.allSeries.flatMap((item) => [...item.tags]))].sort((a, b) => a.localeCompare(b, 'zh-CN'));
 }
@@ -193,33 +208,38 @@ function escapeHtml(value) {
 }
 
 /**
- * 规范化剧集列表: 同一集号仅保留更新时间最新的记录
+ * 规范化剧集列表
  *
  * @param {Array<Object>} episodes - 原始剧集列表
- * @returns {Array<Object>} 规范化后并按集号升序的剧集列表
+ * @returns {Array<Object>} 同一集号只保留最新记录 并按集号升序返回
  */
 function normalizeEpisodeRecords(episodes) {
     /**
-     * 先用Map暂存"集号 => 剧集记录"
-     * 如果遍历过程中遇到同一集号的多条记录，就直接取出已保存的记录比较更新时间
+     * 先用 Map 暂存 集号 => 剧集记录
+     * 遍历过程中如果遇到同一集号的多条记录
+     * 就比较 updatedAt 只保留更新的一条
      */
     const latestEpisodeByNumber = new Map();
 
     episodes.forEach((episode) => {
-        // 后端返回的episode可能是字符串也可能是数字，这里统一转成Number再参与比较
+        // 后端返回的 episode 可能是字符串也可能是数字
+        // 这里先统一转成 Number 再参与比较
         const episodeNo = Number(episode.episode);
 
-        // 无法识别成有效集号的记录直接跳过，避免污染后续排序和选择逻辑
+        // 无法识别成有效集号的记录直接跳过
+        // 避免污染后续排序和选择逻辑
         if (!Number.isFinite(episodeNo)) return;
 
         const existingEpisode = latestEpisodeByNumber.get(episodeNo);
         if (!existingEpisode) {
-            // 第一次遇到某个集号时直接保存，并顺手把episode字段改成数值型
+            // 第一次遇到某个集号时直接保存
+            // 同时把 episode 字段规范成数值型
             latestEpisodeByNumber.set(episodeNo, {...episode, episode: episodeNo});
             return;
         }
 
-        // 同一集号出现多条记录时，保留updatedAt更新的那一条
+        // 同一集号出现多条记录时
+        // 保留 updatedAt 更晚的那一条
         const currentUpdatedAt = new Date(existingEpisode.updatedAt || 0).getTime();
         const nextUpdatedAt = new Date(episode.updatedAt || 0).getTime();
         if (nextUpdatedAt >= currentUpdatedAt) {
@@ -227,7 +247,7 @@ function normalizeEpisodeRecords(episodes) {
         }
     });
 
-    // 最后把Map转回数组，并按集号升序返回给渲染层
+    // 最后把 Map 转回数组并按集号升序返回给渲染层
     return [...latestEpisodeByNumber.values()].sort((a, b) => a.episode - b.episode);
 }
 
@@ -244,7 +264,7 @@ function getSeriesEpisodeOptions(titleName) {
 }
 
 /**
- * 渲染标签多选下拉HTML
+ * 渲染标签多选下拉 HTML
  *
  * @param {string} fieldName - 表单字段名
  * @param {string[]} tags - 可选标签列表
@@ -255,7 +275,8 @@ function renderTagMultiSelectHtml(fieldName, tags, selectedTags = []) {
         return '<div class="multi-select-empty">暂无可选标签</div>';
     }
     const selected = new Set(selectedTags);
-    // 这里先把已选标签转成安全文本，再拼成summary里展示的说明文案
+    // 这里会先把已选标签转成安全文本
+    // 然后再拼成 summary 里展示的文案
     const selectedText = selected.size ? [...selected].map((tag) => escapeHtml(tag)).join('、') : '选择标签(可多选)';
     return `
 <details class="multi-select" data-multi-select>
@@ -268,7 +289,7 @@ function renderTagMultiSelectHtml(fieldName, tags, selectedTags = []) {
 }
 
 /**
- * 绑定多选组件 summary 文案同步逻辑。
+ * 绑定多选组件 summary 文案同步逻辑
  *
  * @param {ParentNode} scope - 事件委托的作用域容器
  */
@@ -278,7 +299,8 @@ function bindMultiSelectSummaryHandlers(scope) {
         if (!summary) return;
 
         const updateSummary = () => {
-            // 链式调用会先收集所有选中的checkbox，再映射成标签值数组，最后拼成summary文案
+            // 这段链式调用会先收集所有已选 checkbox
+            // 再映射成标签值数组 最后拼成 summary 文案
             const checked = [...multiSelect.querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value);
             summary.textContent = checked.length ? checked.join('、') : '选择标签(可多选)';
         };
@@ -294,11 +316,12 @@ function bindMultiSelectSummaryHandlers(scope) {
 }
 
 /**
- * 根据当前选中的漫剧，刷新集号下拉框。
+ * 根据当前选中的漫剧刷新集号下拉框
  */
 function populateEpisodeSelectForSeries(titleSelect, episodeSelect, placeholderText) {
     const episodes = getSeriesEpisodeOptions(titleSelect.value);
-    // map会把每个剧集对象转换成option字符串，join后一次性写回下拉框
+    // map 会把每个剧集对象转换成 option 字符串
+    // join 后再一次性写回下拉框
     episodeSelect.innerHTML = `<option value="">${placeholderText}</option>${episodes
         .map((episode) => `<option value="${episode.episode}">第${episode.episode}集</option>`)
         .join('')}`;
@@ -363,7 +386,9 @@ function renderAdminModalHtml() {
 }
 
 /**
- * 顶层渲染函数：根据 URL 与 uiState 决定渲染首页/详情页及弹窗。
+ * 顶层渲染函数
+ *
+ * 根据当前 URL 和 uiState 决定要渲染首页 详情页和管理弹窗
  */
 function render() {
     const app = document.getElementById('app');
@@ -626,13 +651,19 @@ function renderHome(container) {
 }
 
 /**
- * 渲染详情页（播放器 + 剧集分页切换 + 元数据）。
+ * 渲染详情页
+ *
+ * 会同时处理播放器 剧集分页切换和元信息区域
  */
 function renderDetail(container, series) {
+    // 当前选中的剧集如果已经不在数据里
+    // 就退回到第一集
     if (series.episodes.length > 0 && !series.episodes.some((ep) => ep.episode === uiState.selectedEpisode)) {
         uiState.selectedEpisode = series.episodes[0].episode;
     }
 
+    // 切换到新的详情页时
+    // 根据当前选中集号把详情页分页同步到正确位置
     if (uiState.activeDetailSeriesName !== series.name) {
         const selectedIndex = series.episodes.findIndex((ep) => ep.episode === uiState.selectedEpisode);
         uiState.episodePage = selectedIndex >= 0 ? Math.floor(selectedIndex / uiState.episodePageSize) + 1 : 1;
@@ -683,6 +714,8 @@ function renderDetail(container, series) {
         render();
     };
 
+    // find 会先尝试匹配当前选中的剧集
+    // 找不到时再退回到第一集
     const selected = series.episodes.find((e) => e.episode === uiState.selectedEpisode) || series.episodes[0];
     const maxEpisode = series.episodes.reduce((max, ep) => Math.max(max, Number(ep.episode) || 0), 0);
     const totalEpisodes = series.episodes.length;
@@ -710,19 +743,22 @@ function renderDetail(container, series) {
 }
 
 /**
- * 渲染管理面板(标签/漫剧/剧集三大管理分区)
+ * 渲染管理面板
+ *
+ * 根据当前主分区切换标签 漫剧和剧集三块管理界面
  */
 function renderAdminPanel(adminPanelContainer) {
     if (uiState.activeAdminTab === 'tag') {
         /**
-         * 标签管理页每次渲染时都重新读取当前可用标签，确保表单选项和最新数据一致
-         * 这里不缓存，是因为标签可能刚被创建、重命名或删除
+         * 标签管理页每次渲染时都重新读取可用标签
+         * 这样新建 重命名 删除后表单选项会立即同步
          * @type {string[]}
          */
         const availableTags = collectAvailableTags();
         /**
-         * 先用innerHTML一次性生成当前子操作页(create/rename/delete)的结构
-         * 由于render()会整体重绘管理面板，所以这里采用重绘后重新绑定事件的模式
+         * 先用 innerHTML 一次性生成当前子操作页结构
+         * render 会整体重绘管理面板
+         * 所以这里统一采用重绘后重新绑定事件的方式
          */
         adminPanelContainer.innerHTML = `
 <section class="admin-panel">
@@ -762,7 +798,8 @@ function renderAdminPanel(adminPanelContainer) {
 </section>
         `;
         /**
-         * 操作切换按钮只负责切换uiState，再统一交给render()做界面重绘
+         * 操作切换按钮只负责切换 uiState
+         * 界面重绘统一交给 render 处理
          */
         document.querySelectorAll('[data-tag-action]').forEach((actionSwitchButton) => {
             actionSwitchButton.onclick = () => {
@@ -774,11 +811,9 @@ function renderAdminPanel(adminPanelContainer) {
         const tagCreateForm = document.getElementById('tag-create-form');
         if (tagCreateForm) {
             /**
-             * 新建标签:
-             * 1. 阻止表单默认提交
-             * 2. 从表单提取标签名并清洗空白
-             * 3. 调用后端创建接口
-             * 4. 创建成功后重新拉取基础数据，让筛选区、表单选项、列表状态全部同步
+             * 新建标签流程
+             * 先阻止默认提交 再提取并清洗表单数据
+             * 创建成功后重新拉取基础数据 让筛选区和表单选项一起同步
              * @param submitEvent
              * @returns {Promise<void>}
              */
@@ -804,16 +839,14 @@ function renderAdminPanel(adminPanelContainer) {
             const currentTagSelect = tagRenameForm.elements.namedItem('tagName');
             const renamedTagInput = tagRenameForm.elements.namedItem('newTagName');
 
-            // 选中旧标签后，默认把新标签输入框预填为旧值。
-            // 这样用户只需要在原名字基础上微调，不用手动再输入一遍。
+            // 选中旧标签后会把新标签输入框预填为旧值
+            // 这样用户只需要在原名字基础上微调
             currentTagSelect.onchange = () => {
                 renamedTagInput.value = currentTagSelect.value;
             };
 
-            // 重命名标签:
-            // - 旧标签为空不提交
-            // - 新标签为空不提交
-            // - 新旧名称一致不提交，避免无意义请求
+            // 重命名标签前会先拦掉无效输入
+            // 包括旧值为空 新值为空 和新旧值相同这三种情况
             tagRenameForm.onsubmit = async (submitEvent) => {
                 submitEvent.preventDefault();
                 const submittedFormData = new FormData(submitEvent.target);
@@ -826,8 +859,8 @@ function renderAdminPanel(adminPanelContainer) {
                         method: 'PATCH', body: JSON.stringify({newTagName: updatedTagName})
                     });
                     showFlashMessage('标签改名成功');
-                    // 如果首页当前正筛选的是旧标签，这里要同步切到新标签名，
-                    // 否则刷新后会出现“筛选值已不存在”的状态不一致问题。
+                    // 如果首页当前正筛选的是旧标签
+                    // 这里要同步切到新标签名 避免刷新后筛选状态失效
                     if (uiState.selectedTag === originalTagName) uiState.selectedTag = updatedTagName;
                     await reloadBaseDataAndRender();
                 } catch (error) {
@@ -839,9 +872,8 @@ function renderAdminPanel(adminPanelContainer) {
 
         const tagDeleteForm = document.getElementById('tag-delete-form');
         if (tagDeleteForm) {
-            // 删除标签前先做两层保护:
-            // 1. 没选标签直接返回
-            // 2. 弹出 confirm 二次确认，避免误删
+            // 删除标签前先做两层保护
+            // 没选标签不提交 用户确认后才真正发请求
             tagDeleteForm.onsubmit = async (submitEvent) => {
                 submitEvent.preventDefault();
                 const submittedFormData = new FormData(submitEvent.target);
@@ -852,7 +884,8 @@ function renderAdminPanel(adminPanelContainer) {
                 try {
                     await requestJsonApiOrThrow(`/api/tags/${encodeURIComponent(deletedTagName)}`, {method: 'DELETE'});
                     showFlashMessage('标签删除成功');
-                    // 被删标签如果正处于首页筛选中，需要清空筛选条件。
+                    // 被删标签如果正处于首页筛选中
+                    // 这里要把筛选条件一起清空
                     if (uiState.selectedTag === deletedTagName) uiState.selectedTag = null;
                     await reloadBaseDataAndRender();
                 } catch (error) {
@@ -909,7 +942,8 @@ function renderAdminPanel(adminPanelContainer) {
         `;
 
         /**
-         * 给"新增/修改/删除"三个操作标签绑定点击事件
+         * 子操作标签只负责切换当前状态
+         * 具体界面仍然交给 render 重新绘制
          */
         document.querySelectorAll('[data-title-action]').forEach((actionTabButton) => {
             actionTabButton.onclick = () => {
@@ -918,40 +952,42 @@ function renderAdminPanel(adminPanelContainer) {
             };
         });
 
-        // 绑定多选下拉框summary的交互逻辑，保证展开收起和显示文案正常工作
+        // 绑定多选下拉框的 summary 交互
+        // 这样展开收起和选中后的文案才能保持同步
         bindMultiSelectSummaryHandlers(adminPanelContainer);
 
         const titleCreateForm = document.getElementById('title-create-form');
         if (titleCreateForm) {
-            // 这个节点专门用于显示"标签至少选一个"这类校验错误信息
+            // 这个节点专门显示 标签至少选一个 这类错误信息
             const tagsValidationMessageNode = titleCreateForm.querySelector('#title-create-tags-error');
 
-            // 只要标签勾选状态变化，就立刻重新校验并更新错误提示
+            // 只要标签勾选状态变化 就立即重新校验并更新提示
             titleCreateForm.querySelectorAll('input[name="tags"]').forEach((tagCheckbox) => {
                 tagCheckbox.onchange = () => {
                     validateMultiTagSelection(titleCreateForm, 'tags', tagsValidationMessageNode, '请至少选择一个标签');
                 };
             });
 
-            // 处理"新增漫剧"表单提交
+            // 新增漫剧时会先提取并清洗表单输入
+            // 校验通过后再把名称 海报和标签一起发给后端
             titleCreateForm.onsubmit = async (submitEvent) => {
                 submitEvent.preventDefault();
 
-            // 从当前表单中提取并清洗用户输入的数据
-            const submittedFormData = new FormData(submitEvent.target);
-            const titleName = String(submittedFormData.get('name') || '').trim();
-            const poster = String(submittedFormData.get('poster') || '').trim();
+                // 从当前表单中提取并清洗用户输入的数据
+                const submittedFormData = new FormData(submitEvent.target);
+                const titleName = String(submittedFormData.get('name') || '').trim();
+                const poster = String(submittedFormData.get('poster') || '').trim();
 
-            // 收集所有已选标签
-            // getAll先取出同名checkbox的全部值，后面的map和filter再做裁剪与去空
-            const selectedTagNames = submittedFormData.getAll('tags').map((tagName) => String(tagName).trim()).filter(Boolean);
+                // getAll 会先取出同名 checkbox 的全部值
+                // 后面的 map 和 filter 再负责裁剪空白并过滤空字符串
+                const selectedTagNames = submittedFormData.getAll('tags').map((tagName) => String(tagName).trim()).filter(Boolean);
 
                 // 提交前再做一次兜底校验，防止用户未选择标签直接提交
                 if (!validateMultiTagSelection(submitEvent.target, 'tags', tagsValidationMessageNode, '请至少选择一个标签')) {
                     return;
                 }
                 try {
-                    // 把漫剧名称、海报地址、标签列表发给后端创建新漫剧
+                    // 后端会用这组数据创建漫剧并写入标签关联
                     await requestJsonApiOrThrow('/api/titles', {
                         method: 'POST', body: JSON.stringify({name: titleName, poster: poster, tags: selectedTagNames})
                     });
@@ -971,6 +1007,8 @@ function renderAdminPanel(adminPanelContainer) {
             const newPosterInput = titleRenameForm.elements.namedItem('newPoster');
 
             const fillTitleEditFields = (titleName) => {
+                // 选中某个漫剧后
+                // 把它当前的名称 海报和标签回填到编辑表单
                 const targetSeries = uiState.allSeries.find((series) => series.name === titleName);
                 if (!targetSeries) return;
                 newNameInput.value = targetSeries.name;
@@ -993,7 +1031,8 @@ function renderAdminPanel(adminPanelContainer) {
                 const oldName = String(formData.get('name') || '').trim();
                 const newName = String(formData.get('newName') || '').trim();
                 const newPoster = String(formData.get('newPoster') || '').trim();
-                // 这里用链式调用把newTags里的空白项过滤掉，保证提交给后端的是干净标签列表
+                // 这里的链式调用会先取出全部 newTags
+                // 再逐项裁剪空白 最后过滤掉空字符串
                 const newTags = formData
                     .getAll('newTags')
                     .map((tag) => String(tag).trim())
@@ -1016,6 +1055,8 @@ function renderAdminPanel(adminPanelContainer) {
 
         const titleDeleteForm = document.getElementById('title-delete-form');
         if (titleDeleteForm) {
+            // 删除漫剧前先做一次确认
+            // 避免连带删除整部作品下的剧集时误操作
             titleDeleteForm.onsubmit = async (event) => {
                 event.preventDefault();
                 const formData = new FormData(event.target);
@@ -1037,6 +1078,7 @@ function renderAdminPanel(adminPanelContainer) {
         return;
     }
 
+    // 剧集管理分区同样采用 重绘模板后重新绑定事件 的方式
     adminPanelContainer.innerHTML = `
     <section class="admin-panel">
       <div class="action-tabs episode-action-tabs">
@@ -1100,6 +1142,8 @@ function renderAdminPanel(adminPanelContainer) {
     </section>
   `;
 
+    // 子操作切换只修改当前状态
+    // 具体界面刷新统一交给 render
     document.querySelectorAll('[data-episode-action]').forEach((btn) => {
         btn.onclick = () => {
             uiState.activeEpisodeAdminAction = btn.dataset.episodeAction;
@@ -1113,6 +1157,7 @@ function renderAdminPanel(adminPanelContainer) {
     if (episodeCreateForm) {
         episodeCreateForm.onsubmit = async (event) => {
             event.preventDefault();
+            // 表单数据会在这里统一整理成后端接口需要的 payload
             const formData = new FormData(event.target);
             const payload = {
                 titleName: String(formData.get('titleName') || '').trim(),
@@ -1153,7 +1198,8 @@ function renderAdminPanel(adminPanelContainer) {
                 name: String(formData.get('name') || '').trim(),
                 poster: String(formData.get('poster') || '').trim(),
                 directoryUrl: String(formData.get('directoryUrl') || '').trim(),
-                // 先取出全部batchTags，再逐项裁剪空白，最后过滤空字符串
+                // getAll 会先取出全部 batchTags
+                // 后面的 map 和 filter 再负责裁剪空白并过滤空字符串
                 tags: formData.getAll('batchTags').map((item) => String(item).trim()).filter(Boolean)
             };
 
@@ -1186,7 +1232,8 @@ function renderAdminPanel(adminPanelContainer) {
         const syncEpisodeEditFormFields = () => {
             const episodes = getSeriesEpisodeOptions(titleSelect.value);
             const selectedEpisodeNo = Number(episodeSelect.value);
-            // find会从当前漫剧的剧集列表里找出和下拉框集号一致的那一条记录
+            // find 会从当前漫剧的剧集列表里
+            // 找出和下拉框集号一致的那一条记录
             const targetEpisode = episodes.find((episode) => episode.episode === selectedEpisodeNo);
 
             if (!targetEpisode) {
@@ -1200,7 +1247,8 @@ function renderAdminPanel(adminPanelContainer) {
         };
 
         const syncEpisodeSelectOptions = () => {
-            // 先刷新集号下拉框，再根据新的选项同步右侧编辑表单
+            // 先刷新集号下拉框
+            // 再根据新的选项同步右侧编辑表单
             populateEpisodeSelectForSeries(titleSelect, episodeSelect, '选择集号');
             syncEpisodeEditFormFields();
         };
@@ -1237,6 +1285,7 @@ function renderAdminPanel(adminPanelContainer) {
         const episodeSelect = episodeDeleteForm.elements.namedItem('episodeNo');
 
         const syncEpisodeSelectOptions = () => {
+            // 删除表单只需要跟随漫剧切换刷新集号选项
             populateEpisodeSelectForSeries(titleSelect, episodeSelect, '选择集号');
         };
 

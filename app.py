@@ -1,10 +1,9 @@
-"""视频预览站点后端入口。
+"""视频预览站点后端入口
 
-该模块负责：
-1. 初始化 Flask 应用与数据库连接。
-2. 处理标签、漫剧、剧集相关 REST API。
-3. 解析目录链接/文件名中的集号并执行批量导入。
-4. 统一返回 JSON 响应，便于前端稳定消费。
+负责初始化 Flask 与数据库连接
+对外提供标签、漫剧、剧集相关 API
+支持从目录页面或本地目录解析剧集并批量导入
+统一整理 JSON 响应结构供前端消费
 """
 
 import os
@@ -23,16 +22,18 @@ from flask import Flask, jsonify, render_template, request
 from psycopg.errors import UniqueViolation
 from psycopg.rows import dict_row
 
-# 项目根目录（用于定位 .env 及模板/静态资源）。
+# 项目根目录
+# 用于定位 .env、模板和静态资源
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / '.env')
 
 flask_app = Flask(__name__, template_folder='templates', static_folder='static')
 flask_app.config['JSON_AS_ASCII'] = False
 
-# 可识别的视频文件扩展名（用于目录批量导入时过滤候选链接）。
+# 批量导入时只把这些扩展名当作候选视频资源
 VIDEO_EXTENSION_RE = re.compile(r"\.(mp4|m3u8|mov|mkv|avi|flv|webm|ts|m4v)(?:$|[?#])", re.I)
-# 中文数字映射表（用于“第一集/第十集”等文本解析）。
+# 中文数字映射表
+# 用于识别文件名里的 第一集 第十集 这类写法
 CHINESE_DIGIT_MAP = {
     '零': 0, '〇': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四': 4,
     '五': 5, '六': 6, '七': 7, '八': 8, '九': 9,
@@ -40,7 +41,11 @@ CHINESE_DIGIT_MAP = {
 
 
 def get_normalized_env_var(name: str):
-    """读取环境变量并做strip，空字符串按None处理"""
+    """读取环境变量
+
+    返回去掉首尾空格后的值
+    空字符串会被统一折叠成 None
+    """
     value = os.getenv(name)
     if value is None:
         return None
@@ -49,7 +54,11 @@ def get_normalized_env_var(name: str):
 
 
 def build_database_dsn() -> str:
-    """构建 PostgreSQL DSN，优先使用 DATABASE_URL。"""
+    """构建 PostgreSQL DSN
+
+    优先使用 DATABASE_URL
+    未提供时再回退到 PGHOST 等拆分配置
+    """
     database_url = get_normalized_env_var('DATABASE_URL')
     if database_url:
         return database_url
@@ -70,7 +79,10 @@ DATABASE_DSN = build_database_dsn()
 
 @contextmanager
 def open_db_connection():
-    """获取数据库连接并在退出时自动关闭。"""
+    """打开数据库连接
+
+    调用方离开上下文后连接会自动关闭
+    """
     conn = psycopg.connect(DATABASE_DSN, row_factory=dict_row)
     try:
         yield conn
@@ -80,14 +92,17 @@ def open_db_connection():
 
 @contextmanager
 def open_db_transaction():
-    """打开事务上下文，异常时自动回滚。"""
+    """打开事务上下文
+
+    代码块抛出异常时会自动回滚
+    """
     with open_db_connection() as conn:
         with conn.transaction():
             yield conn
 
 
 def build_json_response(status: int, **payload):
-    """统一构造JSON响应对象并设置HTTP状态码"""
+    """构造统一的 JSON 响应对象并写入状态码"""
     response = jsonify(payload)
     response.status_code = status
     return response
@@ -95,7 +110,10 @@ def build_json_response(status: int, **payload):
 
 @flask_app.errorhandler(Exception)
 def handle_unexpected_error(error):
-    """兜底异常处理器：将异常规范化为可读错误消息。"""
+    """兜底异常处理器
+
+    把未捕获异常整理成统一的 JSON 错误响应
+    """
     message = str(error) or 'Internal server error'
     if 'SASL: SCRAM-SERVER-FIRST-MESSAGE: client password must be a string' in message:
         return build_json_response(
@@ -115,7 +133,11 @@ def is_http_or_https_url(value: str) -> bool:
 
 
 def load_oss_credentials():
-    """读取OSS配置并校验必填项，返回创建客户端所需的参数"""
+    """读取 OSS 配置
+
+    返回初始化客户端所需参数
+    缺少任一必填项时直接抛出业务错误
+    """
     access_key = get_normalized_env_var('OSS_ACCESS_KEY')
     secret_key = get_normalized_env_var('OSS_SECRET_KEY')
     endpoint = get_normalized_env_var('OSS_ENDPOINT')
@@ -152,11 +174,11 @@ def append_millisecond_timestamp_to_filename(path_obj: Path) -> str:
 
 
 def resolve_resource_to_url(value: str, name: str, local_path_kind: str = 'any'):
-    """
-    将资源输入规范化为可访问URL
-    支持两类输入:
-    - 远程URL: 直接返回
-    - 本地文件/目录: 上传到对象存储后返回URL(目录会返回URL列表)
+    """把资源输入转换成可访问地址
+
+    远程 URL 直接返回
+    本地文件会上传后返回单个 URL
+    本地目录会上传后返回 URL 列表
     """
     normalized = value.strip()
     if is_http_or_https_url(normalized):
@@ -170,52 +192,53 @@ def resolve_resource_to_url(value: str, name: str, local_path_kind: str = 'any')
     bucket_name = (bucket_name or "").strip()
 
     try:
-        # 把用户输入的本地路径转换成绝对Path对象，expanduser()会展开"~"，resolve(strict=True)会要求路径必须真实存在
+        # 先把用户输入转成真实存在的绝对路径
+        # 这里会顺便展开 ~ 并阻止不存在的路径继续往下走
         path_object = Path(normalized).expanduser().resolve(strict=True)
     except FileNotFoundError:
-        # 路径不存在时，转成统一的业务错误给上层接口处理
+        # 路径不存在时改写成业务错误
         raise ValueError(f'<{normalized}>本地路径不存在')
     except Exception as e:
-        # 兜底捕获其他路径解析错误，例如非法路径格式或系统层异常
+        # 兜底处理非法路径格式或系统层异常
         raise ValueError(f'路径解析失败: {e}')
 
     client = tos.TosClientV2(access_key, secret_key, endpoint, region)
 
-    # 限制当前场景允许的路径类型，any=文件或目录都可以，file=只允许文件，dir=只允许目录
+    # 当前调用方可以限制这里只接受文件或目录
     if local_path_kind not in {'any', 'file', 'dir'}:
         raise ValueError('local_path_kind 参数非法')
 
-    # 单文件上传分支
+    # 文件输入会上传一个对象并返回单个访问地址
     if path_object.is_file():
         if local_path_kind == 'dir':
             raise ValueError('本地路径必须是目录，不能是文件')
-        # 给文件名追加时间戳，避免上传到对象存储时重名覆盖
+        # 上传前给文件名追加时间戳
+        # 这样多次导入同名文件时不会互相覆盖
         filename_with_timestamp = append_millisecond_timestamp_to_filename(path_object)
-        # 对象存储中的目标key
         key = f'{name}/{filename_with_timestamp}'
         response = client.put_object_from_file(bucket_name, key, str(path_object))
         if getattr(response, 'status_code', None) != 200:
             raise ValueError(f'上传失败，status_code={getattr(response, "status_code", "unknown")}')
-        # 返回上传后可访问的完整URL
         return f'https://{bucket_name}.{endpoint}/{key}'
 
-    # 目录批量上传分支
+    # 目录输入会递归上传所有文件
+    # 返回值会是一组可直接访问的视频地址
     if path_object.is_dir():
         if local_path_kind == 'file':
             raise ValueError('本地路径必须是文件，不能是目录')
-        # 收集目录下所有成功上传文件的访问地址
         url_list = []
         for file_path in sorted(path_object.rglob('*')):
-            # 只上传文件，跳过目录节点
+            # 目录节点本身不上传
             if not file_path.is_file():
                 continue
 
-            # relative_path用于保留原目录结构，parent_dir是相对父目录路径
+            # 记录相对路径可以把原目录层级带到对象存储里
             relative_path = file_path.relative_to(path_object)
             parent_dir = relative_path.parent.as_posix()
             filename_with_timestamp = append_millisecond_timestamp_to_filename(file_path)
 
-            # 如果文件位于子目录下，就把子目录结构一并带到对象存储key中
+            # 子目录结构会一起写进 key
+            # 这样返回的 URL 仍然保留原始目录层级
             if parent_dir and parent_dir != '.':
                 key = f'{name}/{parent_dir}/{filename_with_timestamp}'
             else:
@@ -227,17 +250,22 @@ def resolve_resource_to_url(value: str, name: str, local_path_kind: str = 'any')
 
             url_list.append(f'https://{bucket_name}.{endpoint}/{key}')
 
-        # 目录存在但没有任何可上传文件时，视为无效输入
+        # 空目录无法产出可导入资源
         if not url_list:
             raise ValueError('目录为空，或目录下没有可上传文件')
 
         return url_list
 
-    # 路径存在，但既不是普通文件也不是普通目录
+    # 设备文件等特殊路径不在支持范围内
     raise ValueError('输入路径既不是文件也不是目录')
 
 
 def parse_positive_integer_or_default(value, default: int, max_value: int | None = None) -> int:
+    """把输入解析成正整数
+
+    解析失败或结果不合法时回退到默认值
+    可选地把结果限制在最大值以内
+    """
     try:
         parsed = int(value)
     except (TypeError, ValueError):
@@ -250,7 +278,7 @@ def parse_positive_integer_or_default(value, default: int, max_value: int | None
 
 
 def convert_to_iso_datetime(value):
-    """把数据库中的datetime统一转成ISO字符串，便于前端稳定消费"""
+    """把数据库时间值统一转换成 ISO 字符串"""
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -259,7 +287,7 @@ def convert_to_iso_datetime(value):
 
 
 def serialize_episode_record(row):
-    """把单条剧集记录转换成前端使用的响应结构"""
+    """把单条剧集记录转换成前端响应结构"""
     return {
         'episode': int(row['episode']),
         'firstIngestedAt': convert_to_iso_datetime(row['firstIngestedAt']),
@@ -279,6 +307,7 @@ def serialize_series_record(row):
         'updatedAt': convert_to_iso_datetime(row['updatedAt']),
         'lastNewEpisodeAt': convert_to_iso_datetime(row['lastNewEpisodeAt']),
         'tags': row.get('tags') or [],
+        # 列表推导会把聚合结果里的每一集重新整理成统一字段
         'episodes': [
             {
                 'episode': int(ep['episode']),
@@ -292,7 +321,11 @@ def serialize_series_record(row):
 
 
 def replace_title_tags(conn: psycopg.Connection, title_id: int, tags: list[str]):
-    """用请求中的整组标签覆盖当前漫剧标签，避免残留旧关联"""
+    """用请求里的整组标签覆盖当前漫剧标签
+
+    先清空旧关联再回填新关联
+    这样可以保证数据库状态和本次请求完全一致
+    """
     with conn.cursor() as cur:
         cur.execute('DELETE FROM title_tag WHERE title_id = %s', (title_id,))
         if not tags:
@@ -309,6 +342,7 @@ def replace_title_tags(conn: psycopg.Connection, title_id: int, tags: list[str])
 
 
 def build_series_order_by_sql(sort: str | None) -> str:
+    """把排序参数映射成 SQL 的 ORDER BY 片段"""
     sort_map = {
         'updated_desc': 't.updated_at DESC, t.name ASC',
         'updated_asc': 't.updated_at ASC, t.name ASC',
@@ -321,7 +355,10 @@ def build_series_order_by_sql(sort: str | None) -> str:
 
 
 def parse_chinese_numeral(raw: str | None):
-    """把中文数字片段解析成整数，供剧集号识别逻辑复用"""
+    """把中文数字片段解析成整数
+
+    供剧集号识别逻辑复用
+    """
     if not raw:
         return None
     if raw.isdigit():
@@ -329,7 +366,8 @@ def parse_chinese_numeral(raw: str | None):
     total = 0
     current = 0
     for ch in raw:
-        # 先记录当前数字位，后面遇到十/百/千时再按单位累加到total
+        # 先记录当前数字位
+        # 遇到 十 百 千 时再按单位累加到 total
         if ch in CHINESE_DIGIT_MAP:
             current = CHINESE_DIGIT_MAP[ch]
             continue
@@ -350,7 +388,11 @@ def parse_chinese_numeral(raw: str | None):
 
 
 def extract_episode_number_from_text(raw_text: str | None):
-    """优先按常见剧集格式提取集号，严格匹配失败后再退回普通数字提取"""
+    """从文件名或路径片段里提取集号
+
+    先按常见的 第1集 EP01 这类格式严格匹配
+    都失败时再退回普通数字提取
+    """
     text = str(raw_text or '')
     strict_patterns = [
         re.compile(r'第\s*([零〇一二两三四五六七八九十百千\d]+)\s*[集话話]', re.I),
@@ -374,7 +416,11 @@ def extract_episode_number_from_text(raw_text: str | None):
 
 
 def extract_episode_records_from_directory_html(html: str, directory_url: str):
-    """从目录HTML中提取剧集记录，并按集号去重后返回"""
+    """从目录 HTML 中提取剧集记录
+
+    结果会过滤非视频链接
+    再按集号排序并去重
+    """
     href_matches = re.findall(r'href\s*=\s*(["\'])(.*?)\1', str(html or ''), re.I | re.S)
     episode_records = []
     for _, raw_href in href_matches:
@@ -400,14 +446,15 @@ def extract_episode_records_from_directory_html(html: str, directory_url: str):
 
     episode_records.sort(key=lambda item: (item['episodeNo'], item['videoUrl']))
     deduplicated_episode_records = {}
-    # 排序后只保留同一集号最先出现的那条记录，保证结果稳定
+    # 排序后只保留同一集号最先出现的那条记录
+    # 这样同一目录重复导入时结果顺序会更稳定
     for episode_record in episode_records:
         deduplicated_episode_records.setdefault(episode_record['episodeNo'], episode_record)
     return list(deduplicated_episode_records.values())
 
 
 def extract_episode_records_from_url_list(video_urls: list[str]):
-    """从一组视频URL中提取剧集记录，并按集号去重后返回"""
+    """从一组视频 URL 中提取剧集记录并按集号去重"""
     episode_records = []
     for video_url in video_urls:
         pathname = unquote(urlparse(video_url).path)
@@ -425,13 +472,13 @@ def extract_episode_records_from_url_list(video_urls: list[str]):
 
 
 def query_series_page_data(tag=None, name=None, search=None, sort=None, page=1, page_size=25):
-    """按筛选条件查询漫剧分页数据，并聚合标签与剧集信息。"""
+    """按筛选条件查询漫剧分页数据并聚合标签与剧集信息"""
     filters = []
     values = []
 
     if tag:
         values.append(tag)
-        # 标签筛选用EXISTS子查询，结果上只要求当前漫剧至少命中过一次该标签
+        # 标签筛选只要求当前漫剧至少命中过一次目标标签
         filters.append(
             f'''EXISTS (
                 SELECT 1 FROM title_tag tt
@@ -443,11 +490,12 @@ def query_series_page_data(tag=None, name=None, search=None, sort=None, page=1, 
         values.append(name)
         filters.append('t.name = %s')
     if search:
-        # 搜索场景会先把关键字转成小写，再和LOWER(name)做模糊匹配
+        # 搜索关键字会先转成小写
+        # 再和 LOWER(name) 做模糊匹配
         values.append(f"%{search.strip().lower()}%")
         filters.append('LOWER(t.name) LIKE %s')
 
-    # 没有任何筛选条件时不拼WHERE，从而复用同一套SQL模板
+    # 没有筛选条件时直接复用同一套 SQL 模板
     where_clause = f"WHERE {' AND '.join(filters)}" if filters else ''
     order_by_clause = build_series_order_by_sql(sort)
     order_by_selected_titles = order_by_clause.replace('t.', 'st.')
@@ -466,7 +514,8 @@ def query_series_page_data(tag=None, name=None, search=None, sort=None, page=1, 
         safe_page = min(page, total_pages)
         offset = (safe_page - 1) * page_size
 
-        # 先用selected_titles选出当前页标题，再聚合标签和剧集，避免分页落在聚合后的结果上
+        # 先选出当前页标题再做聚合
+        # 这样分页针对的是漫剧列表而不是聚合后的宽结果
         cur.execute(
             f'''
             WITH selected_titles AS (
@@ -506,7 +555,7 @@ def query_series_page_data(tag=None, name=None, search=None, sort=None, page=1, 
         )
         rows = cur.fetchall()
 
-    # 列表推导会把每一行数据库结果都转换成前端直接可消费的漫剧结构
+    # 列表推导会把数据库行逐条转换成前端直接可消费的结构
     data = [serialize_series_record(row) for row in rows]
     return {
         'data': data,
@@ -520,7 +569,10 @@ def query_series_page_data(tag=None, name=None, search=None, sort=None, page=1, 
 
 
 def query_flat_episode_ingest_records():
-    """查询按剧集展开的导入记录列表，供管理视图直接消费"""
+    """查询按剧集展开的导入记录列表
+
+    返回结果已经是管理视图可直接消费的扁平结构
+    """
     with open_db_connection() as conn, conn.cursor() as cur:
         cur.execute(
             '''
@@ -545,7 +597,8 @@ def query_flat_episode_ingest_records():
         rows = cur.fetchall()
     out = []
     for row in rows:
-        # 这里按剧集逐条展开，方便前端管理视图直接显示每一集对应的导入信息
+        # 这里按剧集逐条展开
+        # 前端管理视图可以直接按行渲染每一集的导入信息
         out.append(
             {
                 'name': row['name'],
@@ -562,7 +615,10 @@ def query_flat_episode_ingest_records():
 
 @flask_app.route('/api/health', methods=['GET'])
 def api_health():
-    """健康检查接口：用于探测服务与数据库连通性。"""
+    """健康检查接口
+
+    用于探测服务与数据库是否可用
+    """
     with open_db_connection() as conn, conn.cursor() as cur:
         cur.execute('SELECT 1')
         cur.fetchone()
@@ -576,7 +632,10 @@ def api_ingest_records():
 
 @flask_app.route('/api/series', methods=['GET'])
 def api_series():
-    """漫剧列表接口：支持标签/关键字/排序/分页查询。"""
+    """漫剧列表接口
+
+    支持标签 关键字 排序和分页查询
+    """
     payload = query_series_page_data(
         tag=request.args.get('tag'),
         name=request.args.get('name'),
@@ -613,6 +672,7 @@ def api_tags_post():
 
 @flask_app.route('/api/tags/<path:tag_name>', methods=['PATCH'])
 def api_tags_patch(tag_name):
+    """重命名标签"""
     body = request.get_json(silent=True) or {}
     if not is_non_empty_text(body.get('newTagName')):
         return build_json_response(400, message='newTagName 不能为空')
@@ -629,6 +689,7 @@ def api_tags_patch(tag_name):
 
 @flask_app.route('/api/tags/<path:tag_name>', methods=['DELETE'])
 def api_tags_delete(tag_name):
+    """删除标签"""
     with open_db_transaction() as conn, conn.cursor() as cur:
         cur.execute('DELETE FROM tag WHERE tag_name = %s', (tag_name,))
         if cur.rowcount == 0:
@@ -638,7 +699,10 @@ def api_tags_delete(tag_name):
 
 @flask_app.route('/api/titles', methods=['POST'])
 def api_titles_post():
-    """创建漫剧基础信息(名称、封面、标签)"""
+    """创建漫剧基础信息
+
+    会同时写入名称 封面和标签关联
+    """
     request_json = request.get_json(silent=True) or {}
     if not is_non_empty_text(request_json.get('name')):
         return build_json_response(400, message='name不能为空')
@@ -646,7 +710,8 @@ def api_titles_post():
         return build_json_response(400, message='poster不能为空')
 
     title_name = request_json['name'].strip()
-    # 列表推导会过滤空白标签，并把其余标签统一裁剪空格后再入库
+    # 列表推导会先过滤空白标签
+    # 再把保留下来的标签统一裁剪首尾空格
     selected_tags = [tag_name.strip() for tag_name in request_json.get('tags', []) if is_non_empty_text(tag_name)]
 
     try:
@@ -669,6 +734,7 @@ def api_titles_post():
 
 @flask_app.route('/api/titles/<path:title_name>', methods=['PATCH'])
 def api_titles_patch(title_name):
+    """修改漫剧名称 封面和标签"""
     body = request.get_json(silent=True) or {}
     if not is_non_empty_text(body.get('newName')) or not is_non_empty_text(body.get('poster')) or not isinstance(body.get('tags'), list):
         return build_json_response(400, message='newName、poster、tags 参数不完整')
@@ -697,6 +763,7 @@ def api_titles_patch(title_name):
 
 @flask_app.route('/api/titles/<path:title_name>', methods=['DELETE'])
 def api_titles_delete(title_name):
+    """删除漫剧"""
     with open_db_transaction() as conn, conn.cursor() as cur:
         cur.execute('DELETE FROM title WHERE name = %s', (title_name,))
         if cur.rowcount == 0:
@@ -706,12 +773,17 @@ def api_titles_delete(title_name):
 
 @flask_app.route('/api/episodes/batch-directory', methods=['POST'])
 def api_episodes_batch_directory():
-    """批量导入：支持目录 URL 或本地目录（自动上传后解析）。"""
+    """按目录批量导入剧集
+
+    支持目录 URL
+    也支持本地目录上传后再解析
+    """
     body = request.get_json(silent=True) or {}
     name = str(body.get('name') or '').strip()
     poster = str(body.get('poster') or '').strip()
     directory_url = str(body.get('directoryUrl') or '').strip()
-    # 列表推导会先过滤空标签，再把保留下来的标签名裁掉首尾空白
+    # 列表推导会先过滤空标签
+    # 再把保留下来的标签名裁掉首尾空白
     tags = [tag.strip() for tag in body.get('tags', []) if is_non_empty_text(tag)]
 
     if not name or not poster or not directory_url:
@@ -729,8 +801,8 @@ def api_episodes_batch_directory():
                 cur.execute('INSERT INTO title(name, cover_url) VALUES (%s, %s) RETURNING id', (name, '__pending__'))
                 title_id = cur.fetchone()['id']
 
-            # 先把封面和目录资源解析成可访问地址
-            # 目录输入如果来自本地目录，最终可能直接得到一组已上传的视频URL
+            # 先把封面和目录输入都转换成可访问资源
+            # 目录输入如果来自本地目录 这里会直接得到一组已上传的视频 URL
             title_storage_prefix = str(title_id)
             poster = resolve_resource_to_url(poster, title_storage_prefix, local_path_kind='file')
             resolved_directory_resource = resolve_resource_to_url(directory_url, title_storage_prefix, local_path_kind='dir')
@@ -741,7 +813,8 @@ def api_episodes_batch_directory():
                 if parsed.scheme not in {'http', 'https'} or not parsed.netloc:
                     raise ValueError('directoryUrl 不是合法 URL')
 
-                # 目录URL场景会先拉取HTML，再从页面里筛出视频链接
+                # 目录 URL 场景会先拉取 HTML
+                # 再从页面里的链接中筛出可导入视频
                 response = requests.get(resolved_directory_resource, timeout=20)
                 if response.status_code >= 400:
                     raise ValueError(f'读取目录失败：HTTP {response.status_code}')
@@ -763,7 +836,7 @@ def api_episodes_batch_directory():
             replace_title_tags(conn, title_id, tags)
 
             # 两个列表推导会把解析结果拆成并行数组
-            # 后面的UNNEST会把这两个数组重新展开成SQL里的临时输入表
+            # 后面的 UNNEST 会把它们重新展开成 SQL 临时输入表
             episode_numbers = [item['episodeNo'] for item in parsed_episode_records]
             episode_urls = [item['videoUrl'] for item in parsed_episode_records]
             cur.execute(
@@ -811,7 +884,7 @@ def api_episodes_batch_directory():
 
 @flask_app.route('/api/episodes', methods=['POST'])
 def api_episodes_post():
-    """新增单集内容。"""
+    """新增单集内容"""
     body = request.get_json(silent=True) or {}
     title_name = str(body.get('titleName') or '').strip()
     try:
@@ -850,7 +923,7 @@ def api_episodes_post():
 
 @flask_app.route('/api/episodes', methods=['PATCH'])
 def api_episodes_patch():
-    """修改单集集号与视频地址。"""
+    """修改单集集号与视频地址"""
     body = request.get_json(silent=True) or {}
     title_name = str(body.get('titleName') or '').strip()
     raw_video_url = str(body.get('videoUrl') or '').strip()
@@ -879,7 +952,8 @@ def api_episodes_patch():
             )
         except ValueError as exc:
             return build_json_response(400, message=str(exc))
-        # 单集接口只接受单个视频资源；如果得到列表，说明用户传入的是目录而不是文件
+        # 单集接口只接受单个视频资源
+        # 如果这里拿到列表 说明用户传入的是目录而不是文件
         if isinstance(video_url, list):
             return build_json_response(400, message='videoUrl 必须是单个视频资源地址，不能是目录')
         try:
@@ -903,7 +977,7 @@ def api_episodes_patch():
 
 @flask_app.route('/api/episodes', methods=['DELETE'])
 def api_episodes_delete():
-    """删除单集内容。"""
+    """删除单集内容"""
     body = request.get_json(silent=True) or {}
     title_name = str(body.get('titleName') or '').strip()
     try:
@@ -935,7 +1009,10 @@ def api_episodes_delete():
 @flask_app.route('/', defaults={'path': ''})
 @flask_app.route('/<path:path>')
 def spa(path: str):
-    """SPA 兜底路由：非 API 请求统一交给前端入口页面。"""
+    """SPA 兜底路由
+
+    非 API 请求统一交给前端入口页面
+    """
     if path.startswith('api/'):
         return build_json_response(404, message='API endpoint not found.')
     return render_template('index.html')

@@ -3,14 +3,14 @@
 <head>
     <meta charset="UTF-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-    <title>xyy</title>
     <link rel="stylesheet" href="/static/styles.css"/>
+    <title>xyy</title>
 </head>
 <body>
-<!-- SPA挂载点: static/app.js会把首页、详情页和管理弹窗都渲染到这里 -->
+<!-- SPA挂载点，static/app.js会把首页、详情页和管理弹窗都渲染到这里 -->
 <main class="app" id="app"></main>
 
-<!-- 首页模板: 标签筛选区和漫剧海报网格 -->
+<!-- 首页模板，负责标签筛选区和漫剧海报网格 -->
 <template id="home-template">
     <section class="home-page">
         <header class="top-categories" id="category-list"></header>
@@ -18,7 +18,7 @@
     </section>
 </template>
 
-<!-- 详情模板: 视频播放器、剧集切换和元信息区域 -->
+<!-- 详情模板，负责视频播放器、剧集切换和元信息区域 -->
 <template id="detail-template">
     <section class="detail-page">
         <section class="player-wrap">
@@ -33,7 +33,7 @@
     </section>
 </template>
 
-<!-- 前端单页应用入口 -->
+<!-- 前端脚本入口 -->
 <script src="/static/app.js"></script>
 </body>
 </html>
