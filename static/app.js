@@ -697,7 +697,7 @@ function renderDetail(container, series) {
         episodeRow.appendChild(tab);
     });
 
-    const prevEpisodePageBtn = document.getElementById('episode-prev');
+    const prevEpisodePageBtn = document.getElementById('episode-previous');
     const nextEpisodePageBtn = document.getElementById('episode-next');
     prevEpisodePageBtn.disabled = uiState.episodePage <= 1;
     nextEpisodePageBtn.disabled = uiState.episodePage >= totalEpisodePages;
