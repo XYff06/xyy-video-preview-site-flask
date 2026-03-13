@@ -151,7 +151,7 @@ body {
  * width: min(50%, 560px)，大屏下控制提示条宽度避免过长
  * min-width: 260px，避免宽度太小导致内容过度挤压
  */
-.flash-msg {
+.flash-message {
     margin: 0 auto 12px;
     border: 1px solid #cfe3ff;
     background: #edf5ff;
@@ -965,7 +965,7 @@ body {
         padding-top: 12px;
     }
 
-    .flash-msg {
+    .flash-message {
         width: 100%;
         min-width: 0;
     }

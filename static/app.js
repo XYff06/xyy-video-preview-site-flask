@@ -345,7 +345,7 @@ function validateMultiTagSelection(form, fieldName, errorNode, message) {
 function renderFlashMessageHtml() {
     if (!uiState.flashMessage) return '';
     return `
-    <div class="flash-msg" role="status">
+    <div class="flash-message" role="status">
       <span class="flash-text">${uiState.flashMessage}</span>
       <button type="button" class="flash-close" id="flash-close-btn" aria-label="关闭提示">✕</button>
     </div>
