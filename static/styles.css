@@ -19,13 +19,24 @@
     box-sizing: border-box;
 }
 
+/*
+ * 页面基础样式
+ * margin: 0，去掉浏览器默认外边距，避免页面四周出现空白
+ * background: var(--color-page-background)，统一页面底色
+ * color: var(--color-text-primary)，统一正文默认文字颜色
+ */
 body {
     margin: 0;
     background: var(--color-page-background);
     color: var(--color-text-primary);
 }
 
-/* 应用挂载节点始终铺满整个视口 */
+/*
+ * 应用挂载节点
+ * width: 100vw，让应用区域横向铺满整个视口
+ * min-height: 100vh，让应用区域至少撑满一屏高度
+ * padding: 0，避免挂载容器额外挤占布局空间
+ */
 .app {
     width: 100vw;
     min-height: 100vh;
@@ -46,36 +57,65 @@ body {
     min-height: 100vh;
 }
 
-/* 左右两侧栏共用的内边距和收缩规则 */
+/*
+ * 左右侧栏通用样式
+ * min-width: 0，允许侧栏在网格布局里正常收缩，避免内容把列宽撑开
+ * padding: 22px 10px 40px，给侧栏内容提供上左右下留白
+ */
 .side-rail {
     min-width: 0;
     padding: 22px 10px 40px;
 }
 
-/* 左侧栏负责承载返回按钮和顶部辅助区域 */
+/*
+ * 左侧栏容器
+ * display: flex，使用弹性布局承载返回按钮和顶部辅助内容
+ * justify-content: center，默认把左侧栏内容水平居中
+ */
 .left-rail {
     display: flex;
     justify-content: center;
 }
 
-/* 右侧栏负责承载管理入口按钮 */
+/*
+ * 右侧栏容器
+ * display: flex，使用弹性布局承载管理入口
+ * justify-content: center，默认把右侧栏内容水平居中
+ */
 .right-rail {
     display: flex;
     justify-content: center;
 }
 
-/* 中间主内容区负责承载首页 详情页和闪现提示 */
+/*
+ * 中间主内容区
+ * min-width: 0，允许内容列在网格里收缩，避免内部元素撑破布局
+ * padding: 22px 16px 40px，给首页、详情页和提示信息预留统一留白
+ */
 .content-shell {
     min-width: 0;
     padding: 22px 16px 40px;
 }
 
-/* 左上角占位容器 由不同页面动态填入按钮或留空 */
+/*
+ * 左上角占位容器
+ * width: 100%，让动态插入的按钮或筛选区可以横向占满左侧栏
+ */
 #top-row-left {
     width: 100%;
 }
 
-/* 通用主按钮样式 管理入口和搜索操作都会复用 */
+/*
+ * 通用主按钮样式
+ * border: 1px solid var(--color-accent-primary)，用主题色描边强化按钮边界
+ * border-radius: 10px，保持圆角风格统一
+ * background: var(--color-accent-primary)，用主题色填充按钮背景
+ * color: #fff，保证按钮文字和背景形成清晰对比
+ * font-weight: 600，提升按钮文案辨识度
+ * height: 40px，统一主按钮高度
+ * padding: 0 16px，给按钮内容预留左右内边距
+ * cursor: pointer，提示当前元素可以点击
+ */
 .primary-btn {
     border: 1px solid var(--color-accent-primary);
     border-radius: 10px;
@@ -87,7 +127,13 @@ body {
     cursor: pointer;
 }
 
-/* 管理入口按钮在侧栏里的专用尺寸 */
+/*
+ * 管理入口按钮尺寸
+ * width: 100%，让按钮默认占满右侧栏可用宽度
+ * max-width: 86px，限制按钮不要因为侧栏过宽而拉得太大
+ * height: 42px，略高于通用按钮，保证在侧栏里更醒目
+ * padding: 0，交给固定尺寸控制按钮外观
+ */
 .manage-btn {
     width: 100%;
     max-width: 86px;
@@ -95,6 +141,16 @@ body {
     padding: 0;
 }
 
+/*
+ * 顶部提示条容器
+ * margin: 0 auto 12px，让提示条水平居中并和下方内容拉开距离
+ * border和background，使用浅色描边和底色区分提示区域
+ * display: flex，使用弹性布局排列提示文字和关闭按钮
+ * justify-content: space-between，让文字和关闭按钮分居两端
+ * gap: 8px，避免文字和关闭按钮贴得过近
+ * width: min(50%, 560px)，大屏下控制提示条宽度避免过长
+ * min-width: 260px，避免宽度太小导致内容过度挤压
+ */
 .flash-msg {
     margin: 0 auto 12px;
     border: 1px solid #cfe3ff;
@@ -110,6 +166,12 @@ body {
     min-width: 260px;
 }
 
+/*
+ * 提示条文本区域
+ * flex: 1，让文字区域占满剩余空间
+ * min-width: 0，允许文字区域在弹性布局中收缩
+ * white-space: normal和word-break: break-word，允许长内容换行显示
+ */
 .flash-text {
     flex: 1;
     min-width: 0;
@@ -117,6 +179,13 @@ body {
     word-break: break-word;
 }
 
+/*
+ * 提示条关闭按钮
+ * border: 0和background: transparent，移除默认按钮外观
+ * cursor: pointer，提示当前元素可点击关闭提示
+ * line-height: 1，避免关闭图标产生额外垂直空隙
+ * padding: 2px 4px，扩大可点击范围但不明显撑高按钮
+ */
 .flash-close {
     border: 0;
     background: transparent;
@@ -127,14 +196,29 @@ body {
     padding: 2px 4px;
 }
 
-/* 首页标签筛选区 */
-.top-categories {
+/*
+ * 首页分类筛选区
+ * display: grid，使用网格布局排列分类按钮
+ * grid-template-columns: 1fr，默认按单列堆叠，方便窄空间展示
+ * gap: 10px，控制分类按钮之间的间距
+ * width: 100%，让筛选区占满可用宽度
+ */
+.categories {
     display: grid;
     grid-template-columns: 1fr;
     gap: 10px;
     width: 100%;
 }
 
+/*
+ * 分类按钮
+ * width: 100%和min-height: 42px，让按钮在网格里撑满列宽并保持统一高度
+ * border-radius: 999px，使用胶囊形外观强化可点击感
+ * border和background，给默认状态提供浅色背景和边框过渡空间
+ * display: inline-flex，配合居中属性让多行文字也能稳定居中
+ * white-space: normal和word-break: break-word，允许较长分类名自动换行
+ * transition: all 0.2s ease，让悬停和激活态切换更平滑
+ */
 .category-pill {
     width: 100%;
     min-height: 42px;
@@ -171,15 +255,31 @@ body {
 }
 
 
+/*
+ * 首页搜索栏外层
+ * margin-bottom: 12px，让搜索区和后续内容保持间距
+ */
 .home-search-bar {
     margin-bottom: 12px;
 }
 
+/*
+ * 搜索表单布局
+ * display: flex，横向排列输入框 排序框和搜索按钮
+ * gap: 10px，控制各个表单项之间的间距
+ */
 .search-form {
     display: flex;
     gap: 10px;
 }
 
+/*
+ * 全局搜索输入框
+ * width: 100%，让输入框占满搜索区剩余空间
+ * border和border-radius，统一输入控件的边框和圆角风格
+ * height: 50px，保证输入框触控区域足够大
+ * padding: 0 18px，给输入文字留出左右呼吸感
+ */
 .global-search {
     width: 100%;
     border: 1px solid var(--color-border-default);
@@ -194,6 +294,13 @@ body {
     border-color: var(--color-accent-primary);
 }
 
+/*
+ * 排序下拉框
+ * min-width: 250px，避免选项文字把控件压得过窄
+ * height: 50px，和搜索输入框保持同高
+ * border-radius: 0，保留下拉框更偏直角的视觉区分
+ * background: #fff，保持控件背景清晰
+ */
 .global-sort {
     border: 1px solid var(--color-border-default);
     border-radius: 0;
@@ -210,6 +317,13 @@ body {
     border-color: var(--color-accent-primary);
 }
 
+/*
+ * 搜索按钮
+ * height: 50px，和输入框 下拉框保持同一高度
+ * min-width: 96px，保证按钮文案不会被压缩
+ * padding: 0 22px，增强按钮横向留白
+ * border-radius: 999px，保持和搜索框一致的圆润风格
+ */
 .search-btn {
     height: 50px;
     min-width: 96px;
@@ -217,6 +331,13 @@ body {
     border-radius: 999px;
 }
 
+/*
+ * 空状态提示
+ * grid-column: 1 / -1，让提示文案横跨整个网格宽度
+ * text-align: center，把空状态文案居中展示
+ * color: var(--color-text-secondary)，弱化提示文案的视觉权重
+ * margin: 18px 0，和上下内容保持距离
+ */
 .empty-state {
     grid-column: 1 / -1;
     text-align: center;
@@ -224,6 +345,13 @@ body {
     margin: 18px 0;
 }
 
+/*
+ * 分页容器
+ * display: flex，使用弹性布局排列分页按钮和辅助信息
+ * justify-content: center，把分页控件整体居中
+ * flex-wrap: wrap，空间不足时允许自动换行
+ * gap: 10px，控制分页项之间的间距
+ */
 .pagination {
     display: flex;
     align-items: center;
@@ -288,7 +416,12 @@ body {
     padding: 0 8px;
 }
 
-/* 首页海报网格 */
+/*
+ * 首页海报网格
+ * display: grid，使用网格布局承载海报卡片
+ * grid-template-columns: repeat(5, minmax(0, 1fr))，默认一行展示5列并允许列宽收缩
+ * gap: 12px，控制卡片之间的间距
+ */
 .poster-grid {
     display: grid;
     grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -341,6 +474,13 @@ body {
     font-weight: 700;
 }
 
+/*
+ * 返回按钮
+ * width: 100%，让按钮占满左侧栏可用宽度
+ * border: 0和background: #eaf2ff，使用轻量底色弱化层级但保留可点击感
+ * margin-bottom: 16px，和后续筛选或内容区拉开距离
+ * padding: 10px 8px，扩大点击区域
+ */
 .back-btn {
     width: 100%;
     border: 0;
@@ -353,7 +493,13 @@ body {
     padding: 10px 8px;
 }
 
-/* 详情页剧集分页切换器 */
+/*
+ * 详情页剧集分页切换器
+ * display: grid，使用三列网格排列上一页按钮 剧集列表和下一页按钮
+ * grid-template-columns: 44px minmax(0, 1fr) 44px，两侧按钮固定宽度，中间列表占满剩余空间
+ * align-items: center，让中间列表和两侧按钮垂直对齐
+ * gap: 10px，控制各区域之间的间距
+ */
 .episode-switcher {
     display: grid;
     grid-template-columns: 44px minmax(0, 1fr) 44px;
@@ -392,6 +538,13 @@ body {
     font-weight: 700;
 }
 
+/*
+ * 剧集分页导航按钮
+ * width和height: 44px，使用固定方形尺寸保证点击区域稳定
+ * border-radius: 999px，做成圆形按钮强化翻页动作
+ * background: #f9fafb，给默认状态保留轻量底色
+ * cursor: pointer，提示按钮可点击
+ */
 .episode-nav {
     width: 44px;
     height: 44px;
@@ -413,6 +566,12 @@ body {
     cursor: not-allowed;
 }
 
+/*
+ * 播放器卡片容器
+ * border和border-radius，给播放器区域提供卡片边界
+ * background: #fff，让播放器区域和页面底色分层
+ * padding: 12px，给视频和元信息留出内边距
+ */
 .player-wrap {
     border: 1px solid var(--color-border-default);
     border-radius: 16px;
@@ -459,7 +618,13 @@ body {
     word-break: break-word;
 }
 
-/* 管理弹窗遮罩与容器 */
+/*
+ * 管理弹窗遮罩
+ * position: fixed和inset: 0，让遮罩覆盖整个视口
+ * background: rgba(11, 23, 41, 0.55)，用半透明深色压暗背景内容
+ * display: flex，方便把弹窗主体居中摆放
+ * z-index: 20，确保遮罩和弹窗浮在页面内容之上
+ */
 .modal-mask {
     position: fixed;
     inset: 0;
@@ -471,6 +636,12 @@ body {
     z-index: 20;
 }
 
+/*
+ * 管理弹窗主体
+ * width: min(860px, 96vw)，大屏限制最大宽度，小屏贴近视口宽度
+ * border-radius和box-shadow，强化弹窗卡片层次
+ * max-height: 92vh和overflow: auto，内容过多时允许弹窗内部滚动
+ */
 .admin-modal {
     width: min(860px, 96vw);
     background: #fff;
@@ -506,6 +677,12 @@ body {
     right: 16px;
 }
 
+/*
+ * 管理弹窗顶部标签区
+ * display: grid，使用网格布局排列多个导航按钮
+ * grid-template-columns: repeat(3, minmax(0, 1fr))，默认一行展示3个等宽标签
+ * gap: 10px，控制标签按钮间距
+ */
 .admin-modal-tabs {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -542,6 +719,13 @@ body {
 }
 
 
+/*
+ * 操作标签区
+ * display: grid，使用网格布局排列操作页签
+ * grid-template-columns: repeat(3, minmax(0, 1fr))，默认一行展示3个等宽操作项
+ * gap: 8px，控制页签间距
+ * margin-bottom: 12px，和下方操作面板拉开距离
+ */
 .action-tabs {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -573,6 +757,12 @@ body {
     display: none;
 }
 
+/*
+ * 通用表单布局
+ * display: flex，让输入框 选择框和按钮按弹性布局排列
+ * gap: 10px，统一表单项间距
+ * margin-bottom: 12px，让每组表单和后续内容保持距离
+ */
 .inline-form, .stack-form {
     display: flex;
     gap: 10px;
@@ -607,9 +797,12 @@ body {
     padding: 8px 10px;
 }
 
-/* 多选标签组件
-   summary 负责展示已选结果
-   展开后列表负责承载所有可选标签 */
+/*
+ * 多选标签组件
+ * width: 100%，让组件占满表单可用宽度
+ * border和border-radius，保持和其他表单控件一致的边框风格
+ * background: #fff，确保组件在弹窗里有独立输入区观感
+ */
 .multi-select {
     width: 100%;
     border: 1px solid var(--color-border-default);
@@ -703,9 +896,11 @@ body {
     margin-top: -4px;
 }
 
-/* 响应式规则
-   第一组主要压缩首页和弹窗布局
-   第二组把三栏布局折叠成单列 */
+/*
+ * 第一组响应式规则
+ * max-width: 1080px，主要压缩首页内容区和弹窗标签布局
+ * 结果：管理按钮改成整行宽度，分类区和海报区切到更适合中小屏的列数
+ */
 @media (max-width: 1080px) {
     .top-row {
         flex-direction: column;
@@ -716,7 +911,7 @@ body {
         width: 100%;
     }
 
-    .top-categories {
+    .categories {
         grid-template-columns: repeat(4, minmax(0, 1fr));
     }
 
@@ -738,6 +933,11 @@ body {
 }
 
 
+/*
+ * 第二组响应式规则
+ * max-width: 1100px，把三栏布局折叠成单列
+ * 结果：左右侧栏内容左对齐，提示条占满内容区，主内容更适合窄屏阅读
+ */
 @media (max-width: 1100px) {
     .layout-shell {
         grid-template-columns: minmax(0, 1fr);
@@ -752,7 +952,7 @@ body {
         justify-content: flex-start;
     }
 
-    .top-categories {
+    .categories {
         grid-template-columns: repeat(4, minmax(0, 1fr));
     }
 

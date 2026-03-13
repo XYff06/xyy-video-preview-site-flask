@@ -482,7 +482,7 @@ function render() {
 function renderHome(container) {
     container.innerHTML = document.getElementById('home-template').innerHTML;
     const topRowLeft = document.getElementById('top-row-left');
-    topRowLeft.innerHTML = '<header class="top-categories" id="category-list"></header>';
+    topRowLeft.innerHTML = '<header class="categories" id="category-list"></header>';
     const categoryList = document.getElementById('category-list');
     const grid = document.getElementById('series-grid');
     const homePage = container.querySelector('.home-page');
@@ -717,8 +717,6 @@ function renderDetail(container, series) {
     // find 会先尝试匹配当前选中的剧集
     // 找不到时再退回到第一集
     const selected = series.episodes.find((e) => e.episode === uiState.selectedEpisode) || series.episodes[0];
-    const maxEpisode = series.episodes.reduce((max, ep) => Math.max(max, Number(ep.episode) || 0), 0);
-    const totalEpisodes = series.episodes.length;
     const player = document.getElementById('player');
     const playerMeta = document.getElementById('player-meta');
 
