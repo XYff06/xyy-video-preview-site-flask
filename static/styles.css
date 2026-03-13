@@ -223,7 +223,7 @@ body {
     width: 100%;
     min-height: 42px;
     border-radius: 999px;
-    border: 1.5px solid transparent;
+    border: 1px solid transparent;
     background: #f8f8f8;
     color: #333;
     font-size: 16px;
@@ -253,7 +253,6 @@ body {
     border-color: var(--color-accent-primary);
     font-weight: 700;
 }
-
 
 /*
  * 首页搜索栏外层
