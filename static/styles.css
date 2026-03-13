@@ -1,8 +1,8 @@
 /*
  * 全局样式表
  *
- * 按布局 首页 详情页 管理弹窗和响应式分区组织
- * 颜色和基础文字样式统一收敛到 root 设计令牌
+ * 按布局、首页、详情页、管理弹窗和响应式分区组织
+ * 颜色和基础文字样式统一收敛到root设计令牌
  */
 :root {
     --color-page-background: #eff1f4;
@@ -14,13 +14,11 @@
     font-family: "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
 }
 
-/* 统一使用 border-box 盒模型 让宽高计算更稳定 */
+/* 统一使用border-box盒模型，让宽高计算更稳定 */
 * {
     box-sizing: border-box;
 }
 
-/* 页面基础样式
-   去掉默认留白并设置全站背景和文字颜色 */
 body {
     margin: 0;
     background: var(--color-page-background);
@@ -36,10 +34,10 @@ body {
 
 /*
  * 三栏主布局容器
- *
- * 左侧预留返回和筛选区域
- * 中间承载页面主体
- * 右侧预留管理入口
+ * display: grid，使用网格布局把页面拆成左中右三列
+ * grid-template-columns: clamp(120px, 9vw, 175px) minmax(0, 1fr) clamp(90px, 5vw, 120px)，左列和右列宽度会随视口变化并限制在指定范围内，中间列占满剩余空间
+ * width: 100%，让主布局容器横向占满父级宽度
+ * min-height: 100vh，至少撑满一屏高度，避免内容较少时页面过短
  */
 .layout-shell {
     display: grid;
