@@ -115,6 +115,7 @@ def is_http_or_https_url(value: str) -> bool:
 
 
 def load_oss_credentials():
+    """读取OSS配置并校验必填项，返回创建客户端所需的参数"""
     access_key = get_normalized_env_var('OSS_ACCESS_KEY')
     secret_key = get_normalized_env_var('OSS_SECRET_KEY')
     endpoint = get_normalized_env_var('OSS_ENDPOINT')
@@ -139,6 +140,7 @@ def load_oss_credentials():
 
 
 def append_millisecond_timestamp_to_filename(path_obj: Path) -> str:
+    """给文件名追加毫秒时间戳，避免上传到对象存储时发生同名覆盖"""
     suffixes = ''.join(path_obj.suffixes)
     timestamp = int(time.time() * 1000)
 
@@ -208,12 +210,12 @@ def resolve_resource_to_url(value: str, name: str, local_path_kind: str = 'any')
             if not file_path.is_file():
                 continue
 
-            # relative_path用于保留原目录结构，parent_dir是相对父目录路径。
+            # relative_path用于保留原目录结构，parent_dir是相对父目录路径
             relative_path = file_path.relative_to(path_object)
             parent_dir = relative_path.parent.as_posix()
             filename_with_timestamp = append_millisecond_timestamp_to_filename(file_path)
 
-            # 如果文件位于子目录下，就把子目录结构一并带到对象存储 key 中。
+            # 如果文件位于子目录下，就把子目录结构一并带到对象存储key中
             if parent_dir and parent_dir != '.':
                 key = f'{name}/{parent_dir}/{filename_with_timestamp}'
             else:
@@ -225,13 +227,13 @@ def resolve_resource_to_url(value: str, name: str, local_path_kind: str = 'any')
 
             url_list.append(f'https://{bucket_name}.{endpoint}/{key}')
 
-        # 目录存在但没有任何可上传文件时，视为无效输入。
+        # 目录存在但没有任何可上传文件时，视为无效输入
         if not url_list:
             raise ValueError('目录为空，或目录下没有可上传文件')
 
         return url_list
 
-    # 路径存在，但既不是普通文件也不是普通目录。
+    # 路径存在，但既不是普通文件也不是普通目录
     raise ValueError('输入路径既不是文件也不是目录')
 
 
@@ -248,6 +250,7 @@ def parse_positive_integer_or_default(value, default: int, max_value: int | None
 
 
 def convert_to_iso_datetime(value):
+    """把数据库中的datetime统一转成ISO字符串，便于前端稳定消费"""
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -256,6 +259,7 @@ def convert_to_iso_datetime(value):
 
 
 def serialize_episode_record(row):
+    """把单条剧集记录转换成前端使用的响应结构"""
     return {
         'episode': int(row['episode']),
         'firstIngestedAt': convert_to_iso_datetime(row['firstIngestedAt']),
@@ -265,6 +269,7 @@ def serialize_episode_record(row):
 
 
 def serialize_series_record(row):
+    """把聚合后的漫剧记录转换成前端可直接渲染的结构"""
     episodes = row.get('episodes') or []
     return {
         'id': row['id'],
@@ -286,7 +291,8 @@ def serialize_series_record(row):
     }
 
 
-def bind_tags_to_title(conn: psycopg.Connection, title_id: int, tags: list[str]):
+def replace_title_tags(conn: psycopg.Connection, title_id: int, tags: list[str]):
+    """用请求中的整组标签覆盖当前漫剧标签，避免残留旧关联"""
     with conn.cursor() as cur:
         cur.execute('DELETE FROM title_tag WHERE title_id = %s', (title_id,))
         if not tags:
@@ -302,7 +308,7 @@ def bind_tags_to_title(conn: psycopg.Connection, title_id: int, tags: list[str])
         )
 
 
-def resolve_series_sort_sql(sort: str | None) -> str:
+def build_series_order_by_sql(sort: str | None) -> str:
     sort_map = {
         'updated_desc': 't.updated_at DESC, t.name ASC',
         'updated_asc': 't.updated_at ASC, t.name ASC',
@@ -315,6 +321,7 @@ def resolve_series_sort_sql(sort: str | None) -> str:
 
 
 def parse_chinese_numeral(raw: str | None):
+    """把中文数字片段解析成整数，供剧集号识别逻辑复用"""
     if not raw:
         return None
     if raw.isdigit():
@@ -322,6 +329,7 @@ def parse_chinese_numeral(raw: str | None):
     total = 0
     current = 0
     for ch in raw:
+        # 先记录当前数字位，后面遇到十/百/千时再按单位累加到total
         if ch in CHINESE_DIGIT_MAP:
             current = CHINESE_DIGIT_MAP[ch]
             continue
@@ -342,6 +350,7 @@ def parse_chinese_numeral(raw: str | None):
 
 
 def extract_episode_number_from_text(raw_text: str | None):
+    """优先按常见剧集格式提取集号，严格匹配失败后再退回普通数字提取"""
     text = str(raw_text or '')
     strict_patterns = [
         re.compile(r'第\s*([零〇一二两三四五六七八九十百千\d]+)\s*[集话話]', re.I),
@@ -364,18 +373,20 @@ def extract_episode_number_from_text(raw_text: str | None):
     return value if value > 0 else None
 
 
-def extract_episode_links_from_directory_html(html: str, directory_url: str):
+def extract_episode_records_from_directory_html(html: str, directory_url: str):
+    """从目录HTML中提取剧集记录，并按集号去重后返回"""
     href_matches = re.findall(r'href\s*=\s*(["\'])(.*?)\1', str(html or ''), re.I | re.S)
-    files = []
+    episode_records = []
     for _, raw_href in href_matches:
         raw_href = raw_href.strip()
+        # 先过滤掉不会指向视频文件的锚点和脚本链接
         if not raw_href or raw_href.startswith('#') or raw_href.startswith('?'):
             continue
         if raw_href.lower().startswith(('mailto:', 'javascript:')):
             continue
 
-        absolute = urljoin(directory_url, raw_href)
-        pathname = unquote(urlparse(absolute).path)
+        absolute_video_url = urljoin(directory_url, raw_href)
+        pathname = unquote(urlparse(absolute_video_url).path)
         if pathname.endswith('/'):
             continue
         if not VIDEO_EXTENSION_RE.search(pathname):
@@ -385,39 +396,42 @@ def extract_episode_links_from_directory_html(html: str, directory_url: str):
         episode_no = extract_episode_number_from_text(filename) or extract_episode_number_from_text(pathname)
         if not episode_no:
             continue
-        files.append({'episodeNo': episode_no, 'videoUrl': absolute, 'filename': filename})
+        episode_records.append({'episodeNo': episode_no, 'videoUrl': absolute_video_url, 'filename': filename})
 
-    files.sort(key=lambda item: (item['episodeNo'], item['videoUrl']))
-    unique = {}
-    for item in files:
-        unique.setdefault(item['episodeNo'], item)
-    return list(unique.values())
+    episode_records.sort(key=lambda item: (item['episodeNo'], item['videoUrl']))
+    deduplicated_episode_records = {}
+    # 排序后只保留同一集号最先出现的那条记录，保证结果稳定
+    for episode_record in episode_records:
+        deduplicated_episode_records.setdefault(episode_record['episodeNo'], episode_record)
+    return list(deduplicated_episode_records.values())
 
 
-def extract_episode_links_from_url_list(video_urls: list[str]):
-    files = []
+def extract_episode_records_from_url_list(video_urls: list[str]):
+    """从一组视频URL中提取剧集记录，并按集号去重后返回"""
+    episode_records = []
     for video_url in video_urls:
         pathname = unquote(urlparse(video_url).path)
         filename = pathname.split('/')[-1] if pathname else ''
         episode_no = extract_episode_number_from_text(filename) or extract_episode_number_from_text(pathname)
         if not episode_no:
             continue
-        files.append({'episodeNo': episode_no, 'videoUrl': video_url, 'filename': filename})
+        episode_records.append({'episodeNo': episode_no, 'videoUrl': video_url, 'filename': filename})
 
-    files.sort(key=lambda item: (item['episodeNo'], item['videoUrl']))
-    unique = {}
-    for item in files:
-        unique.setdefault(item['episodeNo'], item)
-    return list(unique.values())
+    episode_records.sort(key=lambda item: (item['episodeNo'], item['videoUrl']))
+    deduplicated_episode_records = {}
+    for episode_record in episode_records:
+        deduplicated_episode_records.setdefault(episode_record['episodeNo'], episode_record)
+    return list(deduplicated_episode_records.values())
 
 
-def query_series_page(tag=None, name=None, search=None, sort=None, page=1, page_size=25):
+def query_series_page_data(tag=None, name=None, search=None, sort=None, page=1, page_size=25):
     """按筛选条件查询漫剧分页数据，并聚合标签与剧集信息。"""
     filters = []
     values = []
 
     if tag:
         values.append(tag)
+        # 标签筛选用EXISTS子查询，结果上只要求当前漫剧至少命中过一次该标签
         filters.append(
             f'''EXISTS (
                 SELECT 1 FROM title_tag tt
@@ -429,11 +443,13 @@ def query_series_page(tag=None, name=None, search=None, sort=None, page=1, page_
         values.append(name)
         filters.append('t.name = %s')
     if search:
+        # 搜索场景会先把关键字转成小写，再和LOWER(name)做模糊匹配
         values.append(f"%{search.strip().lower()}%")
         filters.append('LOWER(t.name) LIKE %s')
 
+    # 没有任何筛选条件时不拼WHERE，从而复用同一套SQL模板
     where_clause = f"WHERE {' AND '.join(filters)}" if filters else ''
-    order_by_clause = resolve_series_sort_sql(sort)
+    order_by_clause = build_series_order_by_sql(sort)
     order_by_selected_titles = order_by_clause.replace('t.', 'st.')
 
     with open_db_connection() as conn, conn.cursor() as cur:
@@ -450,6 +466,7 @@ def query_series_page(tag=None, name=None, search=None, sort=None, page=1, page_
         safe_page = min(page, total_pages)
         offset = (safe_page - 1) * page_size
 
+        # 先用selected_titles选出当前页标题，再聚合标签和剧集，避免分页落在聚合后的结果上
         cur.execute(
             f'''
             WITH selected_titles AS (
@@ -489,6 +506,7 @@ def query_series_page(tag=None, name=None, search=None, sort=None, page=1, page_
         )
         rows = cur.fetchall()
 
+    # 列表推导会把每一行数据库结果都转换成前端直接可消费的漫剧结构
     data = [serialize_series_record(row) for row in rows]
     return {
         'data': data,
@@ -501,7 +519,8 @@ def query_series_page(tag=None, name=None, search=None, sort=None, page=1, page_
     }
 
 
-def query_flat_ingest_records():
+def query_flat_episode_ingest_records():
+    """查询按剧集展开的导入记录列表，供管理视图直接消费"""
     with open_db_connection() as conn, conn.cursor() as cur:
         cur.execute(
             '''
@@ -526,6 +545,7 @@ def query_flat_ingest_records():
         rows = cur.fetchall()
     out = []
     for row in rows:
+        # 这里按剧集逐条展开，方便前端管理视图直接显示每一集对应的导入信息
         out.append(
             {
                 'name': row['name'],
@@ -551,13 +571,13 @@ def api_health():
 
 @flask_app.route('/api/ingest-records', methods=['GET'])
 def api_ingest_records():
-    return build_json_response(200, data=query_flat_ingest_records())
+    return build_json_response(200, data=query_flat_episode_ingest_records())
 
 
 @flask_app.route('/api/series', methods=['GET'])
 def api_series():
     """漫剧列表接口：支持标签/关键字/排序/分页查询。"""
-    payload = query_series_page(
+    payload = query_series_page_data(
         tag=request.args.get('tag'),
         name=request.args.get('name'),
         search=request.args.get('search'),
@@ -626,22 +646,22 @@ def api_titles_post():
         return build_json_response(400, message='poster不能为空')
 
     title_name = request_json['name'].strip()
+    # 列表推导会过滤空白标签，并把其余标签统一裁剪空格后再入库
     selected_tags = [tag_name.strip() for tag_name in request_json.get('tags', []) if is_non_empty_text(tag_name)]
 
     try:
         with open_db_transaction() as db_connection, db_connection.cursor() as db_cursor:
             db_cursor.execute('INSERT INTO title(name, cover_url) VALUES (%s, %s) RETURNING id', (title_name, '__pending__'))
             created_title_id = db_cursor.fetchone()['id']
-            try:
-                poster_url = resolve_resource_to_url(
-                    request_json['poster'],
-                    str(created_title_id),
-                    local_path_kind='file',
-                )
-            except ValueError as resolve_error:
-                return build_json_response(400, message=str(resolve_error))
+            poster_url = resolve_resource_to_url(
+                request_json['poster'],
+                str(created_title_id),
+                local_path_kind='file',
+            )
             db_cursor.execute('UPDATE title SET cover_url = %s WHERE id = %s', (poster_url, created_title_id))
-            bind_tags_to_title(db_connection, created_title_id, selected_tags)
+            replace_title_tags(db_connection, created_title_id, selected_tags)
+    except ValueError as resolve_error:
+        return build_json_response(400, message=str(resolve_error))
     except UniqueViolation:
         return build_json_response(409, message=f'<{title_name}>漫剧名称已存在')
     return build_json_response(201, message=f'<{title_name}>漫剧已创建')
@@ -665,12 +685,11 @@ def api_titles_patch(title_name):
             if not row:
                 return build_json_response(404, message='漫剧不存在')
             title_id = row['id']
-            try:
-                poster = resolve_resource_to_url(body['poster'], str(title_id), local_path_kind='file')
-            except ValueError as exc:
-                return build_json_response(400, message=str(exc))
+            poster = resolve_resource_to_url(body['poster'], str(title_id), local_path_kind='file')
             cur.execute('UPDATE title SET name = %s, cover_url = %s WHERE id = %s', (new_name, poster, title_id))
-            bind_tags_to_title(conn, title_id, tags)
+            replace_title_tags(conn, title_id, tags)
+    except ValueError as exc:
+        return build_json_response(400, message=str(exc))
     except UniqueViolation:
         return build_json_response(409, message='目标名称已存在')
     return build_json_response(200, message='漫剧信息修改成功')
@@ -692,6 +711,7 @@ def api_episodes_batch_directory():
     name = str(body.get('name') or '').strip()
     poster = str(body.get('poster') or '').strip()
     directory_url = str(body.get('directoryUrl') or '').strip()
+    # 列表推导会先过滤空标签，再把保留下来的标签名裁掉首尾空白
     tags = [tag.strip() for tag in body.get('tags', []) if is_non_empty_text(tag)]
 
     if not name or not poster or not directory_url:
@@ -702,48 +722,50 @@ def api_episodes_batch_directory():
     try:
         with open_db_transaction() as conn, conn.cursor() as cur:
             cur.execute('SELECT id FROM title WHERE name = %s', (name,))
-            existing = cur.fetchone()
-            if existing:
-                title_id = existing['id']
+            existing_title_row = cur.fetchone()
+            if existing_title_row:
+                title_id = existing_title_row['id']
             else:
                 cur.execute('INSERT INTO title(name, cover_url) VALUES (%s, %s) RETURNING id', (name, '__pending__'))
                 title_id = cur.fetchone()['id']
 
-            try:
-                prefix = str(title_id)
-                poster = resolve_resource_to_url(poster, prefix, local_path_kind='file')
-                normalized_directory = resolve_resource_to_url(directory_url, prefix, local_path_kind='dir')
-            except ValueError as exc:
-                return build_json_response(400, message=str(exc))
-            if isinstance(normalized_directory, list):
-                parsed_episodes = extract_episode_links_from_url_list(normalized_directory)
+            # 先把封面和目录资源解析成可访问地址
+            # 目录输入如果来自本地目录，最终可能直接得到一组已上传的视频URL
+            title_storage_prefix = str(title_id)
+            poster = resolve_resource_to_url(poster, title_storage_prefix, local_path_kind='file')
+            resolved_directory_resource = resolve_resource_to_url(directory_url, title_storage_prefix, local_path_kind='dir')
+            if isinstance(resolved_directory_resource, list):
+                parsed_episode_records = extract_episode_records_from_url_list(resolved_directory_resource)
             else:
-                parsed = urlparse(normalized_directory)
+                parsed = urlparse(resolved_directory_resource)
                 if parsed.scheme not in {'http', 'https'} or not parsed.netloc:
-                    return build_json_response(400, message='directoryUrl 不是合法 URL')
+                    raise ValueError('directoryUrl 不是合法 URL')
 
-                response = requests.get(normalized_directory, timeout=20)
+                # 目录URL场景会先拉取HTML，再从页面里筛出视频链接
+                response = requests.get(resolved_directory_resource, timeout=20)
                 if response.status_code >= 400:
-                    return build_json_response(400, message=f'读取目录失败：HTTP {response.status_code}')
+                    raise ValueError(f'读取目录失败：HTTP {response.status_code}')
                 content_type = response.headers.get('content-type', '')
                 if not re.search(r'text/html|application/xhtml\+xml', content_type, re.I):
-                    return build_json_response(400, message='目录地址返回的不是 HTML 页面，无法解析视频列表')
+                    raise ValueError('目录地址返回的不是 HTML 页面，无法解析视频列表')
 
-                parsed_episodes = extract_episode_links_from_directory_html(response.text, normalized_directory)
-            if not parsed_episodes:
-                return build_json_response(400, message='目录中未识别到可导入的视频文件。请确认链接可直接访问且文件名包含集号（如第1集/第一集/EP01）。')
+                parsed_episode_records = extract_episode_records_from_directory_html(response.text, resolved_directory_resource)
+            if not parsed_episode_records:
+                raise ValueError('目录中未识别到可导入的视频文件。请确认链接可直接访问且文件名包含集号（如第1集/第一集/EP01）。')
 
             cur.execute('UPDATE title SET cover_url = %s WHERE id = %s', (poster, title_id))
 
             cur.execute('SELECT id, tag_name FROM tag WHERE tag_name = ANY(%s)', (tags,))
             tag_rows = cur.fetchall()
             if not tag_rows:
-                return build_json_response(400, message='所选标签不存在，请先创建标签')
+                raise ValueError('所选标签不存在，请先创建标签')
 
-            bind_tags_to_title(conn, title_id, tags)
+            replace_title_tags(conn, title_id, tags)
 
-            episode_nos = [item['episodeNo'] for item in parsed_episodes]
-            episode_urls = [item['videoUrl'] for item in parsed_episodes]
+            # 两个列表推导会把解析结果拆成并行数组
+            # 后面的UNNEST会把这两个数组重新展开成SQL里的临时输入表
+            episode_numbers = [item['episodeNo'] for item in parsed_episode_records]
+            episode_urls = [item['videoUrl'] for item in parsed_episode_records]
             cur.execute(
                 '''
                 WITH input AS (SELECT *
@@ -767,20 +789,22 @@ def api_episodes_batch_directory():
                 SELECT (SELECT COUNT(*) ::int FROM inserted) AS inserted,
                        (SELECT COUNT(*) ::int FROM updated)  AS updated
                 ''',
-                (episode_nos, episode_urls, title_id, title_id),
+                (episode_numbers, episode_urls, title_id, title_id),
             )
-            stats = cur.fetchone()
+            upsert_stats = cur.fetchone()
+    except ValueError as exc:
+        return build_json_response(400, message=str(exc))
     except UniqueViolation:
         return build_json_response(409, message='漫剧名称冲突，请更换名称')
 
     return build_json_response(
         201,
-        message=f'批量导入完成，共识别 {len(parsed_episodes)} 集',
+        message=f'批量导入完成，共识别 {len(parsed_episode_records)} 集',
         data={
-            'total': len(parsed_episodes),
-            'inserted': stats['inserted'] if stats else 0,
-            'updated': stats['updated'] if stats else 0,
-            'episodes': [{'episodeNo': item['episodeNo'], 'videoUrl': item['videoUrl']} for item in parsed_episodes],
+            'total': len(parsed_episode_records),
+            'inserted': upsert_stats['inserted'] if upsert_stats else 0,
+            'updated': upsert_stats['updated'] if upsert_stats else 0,
+            'episodes': [{'episodeNo': item['episodeNo'], 'videoUrl': item['videoUrl']} for item in parsed_episode_records],
         },
     )
 
@@ -831,15 +855,15 @@ def api_episodes_patch():
     title_name = str(body.get('titleName') or '').strip()
     raw_video_url = str(body.get('videoUrl') or '').strip()
     try:
-        source_no = int(body.get('episodeNo'))
-        target_no = int(body.get('newEpisodeNo'))
+        current_episode_no = int(body.get('episodeNo'))
+        new_episode_no = int(body.get('newEpisodeNo'))
     except (TypeError, ValueError):
-        source_no = None
-        target_no = None
+        current_episode_no = None
+        new_episode_no = None
 
-    if not title_name or source_no is None or target_no is None or not raw_video_url:
+    if not title_name or current_episode_no is None or new_episode_no is None or not raw_video_url:
         return build_json_response(400, message='参数不完整')
-    if source_no <= 0 or target_no <= 0:
+    if current_episode_no <= 0 or new_episode_no <= 0:
         return build_json_response(400, message='集号必须大于0')
 
     with open_db_transaction() as conn, conn.cursor() as cur:
@@ -855,6 +879,7 @@ def api_episodes_patch():
             )
         except ValueError as exc:
             return build_json_response(400, message=str(exc))
+        # 单集接口只接受单个视频资源；如果得到列表，说明用户传入的是目录而不是文件
         if isinstance(video_url, list):
             return build_json_response(400, message='videoUrl 必须是单个视频资源地址，不能是目录')
         try:
@@ -867,7 +892,7 @@ def api_episodes_patch():
                   AND t.name = %s
                   AND e.episode_no = %s
                 ''',
-                (target_no, video_url, title_name, source_no),
+                (new_episode_no, video_url, title_name, current_episode_no),
             )
         except UniqueViolation:
             return build_json_response(409, message='目标集号已存在')

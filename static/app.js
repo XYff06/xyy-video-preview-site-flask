@@ -35,7 +35,7 @@ const uiState = {
     selectedEpisode: null, // 详情页当前选中的剧集集号
     episodePage: 1, // 详情页剧集标签分页的当前页
     episodePageSize: 10, // 详情页剧集标签分页大小
-    detailSeriesName: '', // 当前详情页绑定的漫剧名称
+    activeDetailSeriesName: '', // 当前详情页正在展示的漫剧名称
     tagExpanded: false, // 首页标签栏是否展开更多项
     loading: true, // 首屏初始化加载状态
     error: null, // 首屏初始化错误信息
@@ -44,10 +44,10 @@ const uiState = {
     flashMessage: '', // 顶部闪现提示文案
     flashAutoCloseTimeout: null, // 闪现提示自动关闭定时器句柄
     flashVersion: 0, // 闪现提示版本号(用于控制重复计时)
-    flashVersionRendered: 0, // 已渲染的闪现提示版本号
+    renderedFlashVersion: 0, // 已经渲染过的闪现提示版本号
     activeTagAction: 'create', // 标签管理子动作(create/rename/delete)
-    activeTitleAction: 'create', // 漫剧管理子动作(create/rename/delete)
-    activeEpisodeAction: 'create' // 剧集管理子动作(create/batch/rename/delete)
+    activeTitleAdminAction: 'create', // 漫剧管理子动作(create/rename/delete)
+    activeEpisodeAdminAction: 'create' // 剧集管理子动作(create/batch/rename/delete)
 };
 
 /**
@@ -78,25 +78,23 @@ async function requestJsonApiOrThrow(requestUrl, requestOptions = {}) {
 /**
  * 拉取漫剧和标签基础数据，更新全局状态，并重新渲染页面
  */
-async function refreshBaseDataAndRender() {
+async function reloadBaseDataAndRender() {
     try {
         /**
-         * Promise.all会同时等待两个请求完成:
-         * 1. 拉取全部漫剧数据
-         * 2. 拉取全部标签数据
-         * 这样比串行等待更快
+         * 并发拉取漫剧列表和标签列表
+         * 两份基础数据都到齐后再一起写入uiState，避免页面只更新一半
          */
         const [seriesListResponse, tagListResponse] = await Promise.all([requestJsonApiOrThrow('/api/series?page=1&pageSize=10000'), requestJsonApiOrThrow('/api/tags')]);
         uiState.allTags = tagListResponse.data;
         /**
-         * 这里会把后端返回的漫剧数据转换成前端更方便使用的结构:
-         * 1. tags转成Set，方便后续判断标签是否存在
-         * 2. episodes交给buildCanonicalEpisodeList做规范化、去重和排序
+         * 后端返回的漫剧记录会在这里做一次前端侧归一化:
+         * 1. tags转成Set，后面判断标签包含关系时不需要反复遍历数组
+         * 2. episodes交给normalizeEpisodeRecords，统一做去重、集号规范化和排序
          */
         uiState.allSeries = seriesListResponse.data.map((seriesRecord) => ({
             ...seriesRecord,
             tags: new Set(seriesRecord.tags),
-            episodes: buildCanonicalEpisodeList(seriesRecord.episodes || [])
+            episodes: normalizeEpisodeRecords(seriesRecord.episodes || [])
         }));
 
         /**
@@ -120,18 +118,19 @@ async function refreshBaseDataAndRender() {
      * 如果当前不是漫剧详情页，而是首页，还需要继续加载首页自己的分页列表数据，因为allSeries是全量基础数据，首页展示列表使用的是另一套支持分页、筛选、排序的结果
      */
     if (!getCurrentRouteSeriesName()) {
-        await loadHomePageSeriesData();
+        await loadHomeSeriesPageData();
     }
 }
 
 /**
  * 按当前筛选、搜索、排序和分页条件加载首页列表
  */
-async function loadHomePageSeriesData() {
+async function loadHomeSeriesPageData() {
     uiState.homeLoading = true;
     uiState.homeError = null;
     render();
 
+    // 只把当前真正生效的筛选条件写进查询参数，避免发送无意义的空字段
     const params = new URLSearchParams();
     params.set('page', String(uiState.currentPage));
     params.set('pageSize', String(uiState.pageSize));
@@ -142,7 +141,7 @@ async function loadHomePageSeriesData() {
     try {
         const payload = await requestJsonApiOrThrow(`/api/series?${params.toString()}`);
         uiState.homeSeries = payload.data.map((item) => ({
-            ...item, episodes: buildCanonicalEpisodeList(item.episodes || [])
+            ...item, episodes: normalizeEpisodeRecords(item.episodes || [])
         }));
         uiState.homeTotal = payload.pagination?.total ?? payload.data.length;
         uiState.currentPage = payload.pagination?.page ?? uiState.currentPage;
@@ -167,11 +166,12 @@ async function loadHomePageSeriesData() {
 function collectAvailableTags() {
     /**
      * 如果后端已经单独返回过完整标签列表uiState.allTags，就直接用它
-     * [...uiState.allTags]是复制一份数组返回，避免外面改到原始状态
+     * [...uiState.allTags]会复制一份数组再返回，避免外部直接改动原始状态
      */
     if (uiState.allTags.length) return [...uiState.allTags];
     /**
-     * 如果allTags还没有数据，就从所有漫剧uiState.allSeries里临时推导标签列表
+     * 如果allTags还没有数据，就从所有漫剧里临时推导标签列表
+     * flatMap会先把每个漫剧里的Set展开成数组，再交给Set统一去重
      */
     return [...new Set(uiState.allSeries.flatMap((item) => [...item.tags]))].sort((a, b) => a.localeCompare(b, 'zh-CN'));
 }
@@ -198,42 +198,28 @@ function escapeHtml(value) {
  * @param {Array<Object>} episodes - 原始剧集列表
  * @returns {Array<Object>} 规范化后并按集号升序的剧集列表
  */
-function buildCanonicalEpisodeList(episodes) {
+function normalizeEpisodeRecords(episodes) {
     /**
-     * 用Map按"集号 => 剧集对象"的形式暂存结果
-     * 这样处理过程中如果遇到同一集号的多条记录，就可以直接通过集号取到当前已保留的那一条进行比较
+     * 先用Map暂存"集号 => 剧集记录"
+     * 如果遍历过程中遇到同一集号的多条记录，就直接取出已保存的记录比较更新时间
      */
     const latestEpisodeByNumber = new Map();
 
     episodes.forEach((episode) => {
-        /**
-         * 后端返回的episode字段可能是字符串，也可能是数字，这里统一转成Number，便于后续比较、排序和作为Map的key使用
-         */
+        // 后端返回的episode可能是字符串也可能是数字，这里统一转成Number再参与比较
         const episodeNo = Number(episode.episode);
 
-        /**
-         * 如果集号不能转成有效数字，说明这条数据不合法，直接跳过，避免污染后面的结果
-         */
+        // 无法识别成有效集号的记录直接跳过，避免污染后续排序和选择逻辑
         if (!Number.isFinite(episodeNo)) return;
 
-        /**
-         * 查看当前这个集号之前是否已经保存过一条记录
-         * 如果没有，说明这是第一次遇到这一集，直接放进Map
-         */
         const existingEpisode = latestEpisodeByNumber.get(episodeNo);
         if (!existingEpisode) {
-            /**
-             * 保存时顺手把episode字段改成规范化后的数字episodeNo，避免后面结果里有的集号是字符串、有的是数字
-             */
+            // 第一次遇到某个集号时直接保存，并顺手把episode字段改成数值型
             latestEpisodeByNumber.set(episodeNo, {...episode, episode: episodeNo});
             return;
         }
 
-        /**
-         * 如果同一集号出现了多条记录，就比较更新时间
-         * existingEpisode是当前已经保留的旧记录，episode是这次遍历到的新记录
-         * 如果这个集号之前已经出现过，就比较updatedAt，谁更新时间更新，就保留谁
-         */
+        // 同一集号出现多条记录时，保留updatedAt更新的那一条
         const currentUpdatedAt = new Date(existingEpisode.updatedAt || 0).getTime();
         const nextUpdatedAt = new Date(episode.updatedAt || 0).getTime();
         if (nextUpdatedAt >= currentUpdatedAt) {
@@ -241,9 +227,7 @@ function buildCanonicalEpisodeList(episodes) {
         }
     });
 
-    /**
-     * Map.values()取出最终保留下来的所有剧集记录，再转成数组，并按集号从小到大排序，保证前端展示顺序稳定
-     */
+    // 最后把Map转回数组，并按集号升序返回给渲染层
     return [...latestEpisodeByNumber.values()].sort((a, b) => a.episode - b.episode);
 }
 
@@ -253,10 +237,10 @@ function buildCanonicalEpisodeList(episodes) {
  * @param {string} titleName - 漫剧名称
  * @returns {Array<Object>} 可用于下拉框的剧集列表
  */
-function getEpisodeOptionsForSeries(titleName) {
+function getSeriesEpisodeOptions(titleName) {
     const matchedSeries = uiState.allSeries.find((series) => series.name === titleName);
     if (!matchedSeries) return [];
-    return buildCanonicalEpisodeList(matchedSeries.episodes);
+    return normalizeEpisodeRecords(matchedSeries.episodes);
 }
 
 /**
@@ -271,6 +255,7 @@ function renderTagMultiSelectHtml(fieldName, tags, selectedTags = []) {
         return '<div class="multi-select-empty">暂无可选标签</div>';
     }
     const selected = new Set(selectedTags);
+    // 这里先把已选标签转成安全文本，再拼成summary里展示的说明文案
     const selectedText = selected.size ? [...selected].map((tag) => escapeHtml(tag)).join('、') : '选择标签(可多选)';
     return `
 <details class="multi-select" data-multi-select>
@@ -287,12 +272,13 @@ function renderTagMultiSelectHtml(fieldName, tags, selectedTags = []) {
  *
  * @param {ParentNode} scope - 事件委托的作用域容器
  */
-function bindMultiSelectSummaryEvents(scope) {
+function bindMultiSelectSummaryHandlers(scope) {
     scope.querySelectorAll('[data-multi-select]').forEach((multiSelect) => {
         const summary = multiSelect.querySelector('[data-multi-summary]');
         if (!summary) return;
 
         const updateSummary = () => {
+            // 链式调用会先收集所有选中的checkbox，再映射成标签值数组，最后拼成summary文案
             const checked = [...multiSelect.querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value);
             summary.textContent = checked.length ? checked.join('、') : '选择标签(可多选)';
         };
@@ -310,8 +296,9 @@ function bindMultiSelectSummaryEvents(scope) {
 /**
  * 根据当前选中的漫剧，刷新集号下拉框。
  */
-function fillEpisodeSelectForSeries(titleSelect, episodeSelect, placeholderText) {
-    const episodes = getEpisodeOptionsForSeries(titleSelect.value);
+function populateEpisodeSelectForSeries(titleSelect, episodeSelect, placeholderText) {
+    const episodes = getSeriesEpisodeOptions(titleSelect.value);
+    // map会把每个剧集对象转换成option字符串，join后一次性写回下拉框
     episodeSelect.innerHTML = `<option value="">${placeholderText}</option>${episodes
         .map((episode) => `<option value="${episode.episode}">第${episode.episode}集</option>`)
         .join('')}`;
@@ -413,11 +400,11 @@ function render() {
     };
 
     const flashCloseBtn = document.getElementById('flash-close-btn');
-    if (uiState.flashMessage && uiState.flashVersionRendered !== uiState.flashVersion) {
+    if (uiState.flashMessage && uiState.renderedFlashVersion !== uiState.flashVersion) {
         if (uiState.flashAutoCloseTimeout) {
             clearTimeout(uiState.flashAutoCloseTimeout);
         }
-        uiState.flashVersionRendered = uiState.flashVersion;
+        uiState.renderedFlashVersion = uiState.flashVersion;
         uiState.flashAutoCloseTimeout = setTimeout(() => {
             hideFlashMessage();
             render();
@@ -449,7 +436,7 @@ function render() {
             };
         });
 
-        renderAdminPanel(document.getElementById('admin-content'));
+            renderAdminPanel(document.getElementById('admin-content'));
     }
 
     const pageContent = document.getElementById('page-content');
@@ -517,7 +504,7 @@ function renderHome(container) {
                 uiState.tagExpanded = !uiState.tagExpanded;
             }
             uiState.currentPage = 1;
-            loadHomePageSeriesData();
+            loadHomeSeriesPageData();
         };
         categoryList.appendChild(btn);
     });
@@ -530,13 +517,13 @@ function renderHome(container) {
         uiState.searchQuery = searchInput.value;
         uiState.sortBy = sortSelect.value;
         uiState.currentPage = 1;
-        loadHomePageSeriesData();
+        loadHomeSeriesPageData();
     };
 
     sortSelect.onchange = () => {
         uiState.sortBy = sortSelect.value;
         uiState.currentPage = 1;
-        loadHomePageSeriesData();
+        loadHomeSeriesPageData();
     };
 
     if (uiState.homeError) {
@@ -606,12 +593,12 @@ function renderHome(container) {
     prevBtn.onclick = () => {
         if (uiState.currentPage <= 1) return;
         uiState.currentPage -= 1;
-        loadHomePageSeriesData();
+        loadHomeSeriesPageData();
     };
     nextBtn.onclick = () => {
         if (uiState.currentPage >= totalPages) return;
         uiState.currentPage += 1;
-        loadHomePageSeriesData();
+        loadHomeSeriesPageData();
     };
 
     pagination.querySelectorAll('[data-page-no]').forEach((btn) => {
@@ -619,7 +606,7 @@ function renderHome(container) {
             const pageNo = Number(btn.dataset.pageNo);
             if (!Number.isFinite(pageNo) || pageNo === uiState.currentPage) return;
             uiState.currentPage = pageNo;
-            loadHomePageSeriesData();
+            loadHomeSeriesPageData();
         };
     });
 
@@ -632,7 +619,7 @@ function renderHome(container) {
         const safePage = Math.min(totalPages, Math.max(1, Math.floor(nextPage)));
         if (safePage === uiState.currentPage) return;
         uiState.currentPage = safePage;
-        loadHomePageSeriesData();
+        loadHomeSeriesPageData();
     };
 
     container.querySelector('.home-page').appendChild(pagination);
@@ -646,10 +633,10 @@ function renderDetail(container, series) {
         uiState.selectedEpisode = series.episodes[0].episode;
     }
 
-    if (uiState.detailSeriesName !== series.name) {
+    if (uiState.activeDetailSeriesName !== series.name) {
         const selectedIndex = series.episodes.findIndex((ep) => ep.episode === uiState.selectedEpisode);
         uiState.episodePage = selectedIndex >= 0 ? Math.floor(selectedIndex / uiState.episodePageSize) + 1 : 1;
-        uiState.detailSeriesName = series.name;
+        uiState.activeDetailSeriesName = series.name;
     }
 
     const topRowLeft = document.getElementById('top-row-left');
@@ -658,7 +645,7 @@ function renderDetail(container, series) {
 
     document.getElementById('back-home').onclick = () => {
         history.pushState({}, '', '/');
-        loadHomePageSeriesData();
+        loadHomeSeriesPageData();
     };
 
     const episodeRow = document.getElementById('episode-row');
@@ -804,7 +791,7 @@ function renderAdminPanel(adminPanelContainer) {
                         method: 'POST', body: JSON.stringify({tagName: createdTagName})
                     });
                     showFlashMessage(`标签[${createdTagName}]已创建`);
-                    await refreshBaseDataAndRender();
+                    await reloadBaseDataAndRender();
                 } catch (error) {
                     showFlashMessage(error.message);
                     render();
@@ -842,7 +829,7 @@ function renderAdminPanel(adminPanelContainer) {
                     // 如果首页当前正筛选的是旧标签，这里要同步切到新标签名，
                     // 否则刷新后会出现“筛选值已不存在”的状态不一致问题。
                     if (uiState.selectedTag === originalTagName) uiState.selectedTag = updatedTagName;
-                    await refreshBaseDataAndRender();
+                    await reloadBaseDataAndRender();
                 } catch (error) {
                     showFlashMessage(error.message);
                     render();
@@ -867,7 +854,7 @@ function renderAdminPanel(adminPanelContainer) {
                     showFlashMessage('标签删除成功');
                     // 被删标签如果正处于首页筛选中，需要清空筛选条件。
                     if (uiState.selectedTag === deletedTagName) uiState.selectedTag = null;
-                    await refreshBaseDataAndRender();
+                    await reloadBaseDataAndRender();
                 } catch (error) {
                     showFlashMessage(error.message);
                     render();
@@ -882,11 +869,11 @@ function renderAdminPanel(adminPanelContainer) {
         adminPanelContainer.innerHTML = `
 <section class="admin-panel">
     <div class="action-tabs">
-        <button type="button" class="admin-action-tab-button ${uiState.activeTitleAction === 'create' ? 'active' : ''}"data-title-action="create">新增漫剧</button>
-        <button type="button" class="admin-action-tab-button ${uiState.activeTitleAction === 'rename' ? 'active' : ''}"data-title-action="rename">修改漫剧</button>
-        <button type="button" class="admin-action-tab-button ${uiState.activeTitleAction === 'delete' ? 'active' : ''}"data-title-action="delete">删除漫剧</button>
+        <button type="button" class="admin-action-tab-button ${uiState.activeTitleAdminAction === 'create' ? 'active' : ''}"data-title-action="create">新增漫剧</button>
+        <button type="button" class="admin-action-tab-button ${uiState.activeTitleAdminAction === 'rename' ? 'active' : ''}"data-title-action="rename">修改漫剧</button>
+        <button type="button" class="admin-action-tab-button ${uiState.activeTitleAdminAction === 'delete' ? 'active' : ''}"data-title-action="delete">删除漫剧</button>
     </div>
-    <section class="action-panel ${uiState.activeTitleAction === 'create' ? '' : 'hidden'}">
+    <section class="action-panel ${uiState.activeTitleAdminAction === 'create' ? '' : 'hidden'}">
         <form id="title-create-form" class="stack-form">
             <input name="name" required placeholder="漫剧名"/>
             <input name="poster" required placeholder="海报资源地址: 支持https://...或服务端本地绝对路径"/>
@@ -896,7 +883,7 @@ function renderAdminPanel(adminPanelContainer) {
         </form>
     </section>
 
-    <section class="action-panel ${uiState.activeTitleAction === 'rename' ? '' : 'hidden'}">
+    <section class="action-panel ${uiState.activeTitleAdminAction === 'rename' ? '' : 'hidden'}">
         <form id="title-rename-form" class="stack-form">
             <select name="name" required>
                 <option value="">选择漫剧</option>
@@ -909,7 +896,7 @@ function renderAdminPanel(adminPanelContainer) {
         </form>
     </section>
 
-    <section class="action-panel ${uiState.activeTitleAction === 'delete' ? '' : 'hidden'}">
+    <section class="action-panel ${uiState.activeTitleAdminAction === 'delete' ? '' : 'hidden'}">
         <form id="title-delete-form" class="inline-form">
             <select name="name" required>
                 <option value="">选择漫剧</option>
@@ -926,13 +913,13 @@ function renderAdminPanel(adminPanelContainer) {
          */
         document.querySelectorAll('[data-title-action]').forEach((actionTabButton) => {
             actionTabButton.onclick = () => {
-                uiState.activeTitleAction = actionTabButton.dataset.titleAction;
+                uiState.activeTitleAdminAction = actionTabButton.dataset.titleAction;
                 render();
             };
         });
 
         // 绑定多选下拉框summary的交互逻辑，保证展开收起和显示文案正常工作
-        bindMultiSelectSummaryEvents(adminPanelContainer);
+        bindMultiSelectSummaryHandlers(adminPanelContainer);
 
         const titleCreateForm = document.getElementById('title-create-form');
         if (titleCreateForm) {
@@ -950,13 +937,14 @@ function renderAdminPanel(adminPanelContainer) {
             titleCreateForm.onsubmit = async (submitEvent) => {
                 submitEvent.preventDefault();
 
-                // 从当前表单中提取并清洗用户输入的数据
-                const submittedFormData = new FormData(submitEvent.target);
-                const titleName = String(submittedFormData.get('name') || '').trim();
-                const poster = String(submittedFormData.get('poster') || '').trim();
+            // 从当前表单中提取并清洗用户输入的数据
+            const submittedFormData = new FormData(submitEvent.target);
+            const titleName = String(submittedFormData.get('name') || '').trim();
+            const poster = String(submittedFormData.get('poster') || '').trim();
 
-                // 收集所有已选标签，getAll会返回同名checkbox的全部选中值
-                const selectedTagNames = submittedFormData.getAll('tags').map((tagName) => String(tagName).trim()).filter(Boolean);
+            // 收集所有已选标签
+            // getAll先取出同名checkbox的全部值，后面的map和filter再做裁剪与去空
+            const selectedTagNames = submittedFormData.getAll('tags').map((tagName) => String(tagName).trim()).filter(Boolean);
 
                 // 提交前再做一次兜底校验，防止用户未选择标签直接提交
                 if (!validateMultiTagSelection(submitEvent.target, 'tags', tagsValidationMessageNode, '请至少选择一个标签')) {
@@ -968,7 +956,7 @@ function renderAdminPanel(adminPanelContainer) {
                         method: 'POST', body: JSON.stringify({name: titleName, poster: poster, tags: selectedTagNames})
                     });
                     showFlashMessage(`漫剧[${titleName}]已创建`);
-                    await refreshBaseDataAndRender();
+                    await reloadBaseDataAndRender();
                 } catch (error) {
                     showFlashMessage(error.message);
                     render();
@@ -990,7 +978,7 @@ function renderAdminPanel(adminPanelContainer) {
                 titleRenameForm.querySelectorAll('input[name="newTags"]').forEach((checkbox) => {
                     checkbox.checked = targetSeries.tags.has(checkbox.value);
                 });
-                bindMultiSelectSummaryEvents(titleRenameForm);
+                bindMultiSelectSummaryHandlers(titleRenameForm);
             };
 
             titleSelect.onchange = () => {
@@ -1005,6 +993,7 @@ function renderAdminPanel(adminPanelContainer) {
                 const oldName = String(formData.get('name') || '').trim();
                 const newName = String(formData.get('newName') || '').trim();
                 const newPoster = String(formData.get('newPoster') || '').trim();
+                // 这里用链式调用把newTags里的空白项过滤掉，保证提交给后端的是干净标签列表
                 const newTags = formData
                     .getAll('newTags')
                     .map((tag) => String(tag).trim())
@@ -1017,7 +1006,7 @@ function renderAdminPanel(adminPanelContainer) {
                     });
                     showFlashMessage('漫剧信息修改成功');
                     if (getCurrentRouteSeriesName() === oldName) history.replaceState({}, '', `/${encodeURIComponent(newName)}`);
-                    await refreshBaseDataAndRender();
+                    await reloadBaseDataAndRender();
                 } catch (error) {
                     showFlashMessage(error.message);
                     render();
@@ -1038,7 +1027,7 @@ function renderAdminPanel(adminPanelContainer) {
                     await requestJsonApiOrThrow(`/api/titles/${encodeURIComponent(oldName)}`, {method: 'DELETE'});
                     showFlashMessage('漫剧删除成功');
                     if (getCurrentRouteSeriesName() === oldName) history.replaceState({}, '', '/');
-                    await refreshBaseDataAndRender();
+                    await reloadBaseDataAndRender();
                 } catch (error) {
                     showFlashMessage(error.message);
                     render();
@@ -1051,13 +1040,13 @@ function renderAdminPanel(adminPanelContainer) {
     adminPanelContainer.innerHTML = `
     <section class="admin-panel">
       <div class="action-tabs episode-action-tabs">
-        <button type="button" class="admin-action-tab-button ${uiState.activeEpisodeAction === 'create' ? 'active' : ''}" data-episode-action="create">新增剧集</button>
-        <button type="button" class="admin-action-tab-button ${uiState.activeEpisodeAction === 'batch' ? 'active' : ''}" data-episode-action="batch">批量导入</button>
-        <button type="button" class="admin-action-tab-button ${uiState.activeEpisodeAction === 'rename' ? 'active' : ''}" data-episode-action="rename">修改剧集</button>
-        <button type="button" class="admin-action-tab-button ${uiState.activeEpisodeAction === 'delete' ? 'active' : ''}" data-episode-action="delete">删除剧集</button>
+        <button type="button" class="admin-action-tab-button ${uiState.activeEpisodeAdminAction === 'create' ? 'active' : ''}" data-episode-action="create">新增剧集</button>
+        <button type="button" class="admin-action-tab-button ${uiState.activeEpisodeAdminAction === 'batch' ? 'active' : ''}" data-episode-action="batch">批量导入</button>
+        <button type="button" class="admin-action-tab-button ${uiState.activeEpisodeAdminAction === 'rename' ? 'active' : ''}" data-episode-action="rename">修改剧集</button>
+        <button type="button" class="admin-action-tab-button ${uiState.activeEpisodeAdminAction === 'delete' ? 'active' : ''}" data-episode-action="delete">删除剧集</button>
       </div>
 
-      <section class="action-panel ${uiState.activeEpisodeAction === 'create' ? '' : 'hidden'}">
+      <section class="action-panel ${uiState.activeEpisodeAdminAction === 'create' ? '' : 'hidden'}">
         <form id="episode-create-form" class="stack-form">
           <select name="titleName" required>
             <option value="">选择漫剧</option>
@@ -1069,7 +1058,7 @@ function renderAdminPanel(adminPanelContainer) {
         </form>
       </section>
 
-      <section class="action-panel ${uiState.activeEpisodeAction === 'batch' ? '' : 'hidden'}">
+      <section class="action-panel ${uiState.activeEpisodeAdminAction === 'batch' ? '' : 'hidden'}">
         <form id="episode-batch-form" class="stack-form">
           <input name="name" required placeholder="漫剧名" />
           <input name="poster" required placeholder="海报资源地址: 支持https://...或服务端本地绝对路径" />
@@ -1081,7 +1070,7 @@ function renderAdminPanel(adminPanelContainer) {
         </form>
       </section>
 
-      <section class="action-panel ${uiState.activeEpisodeAction === 'rename' ? '' : 'hidden'}">
+      <section class="action-panel ${uiState.activeEpisodeAdminAction === 'rename' ? '' : 'hidden'}">
         <form id="episode-update-form" class="stack-form">
           <select name="titleName" required>
             <option value="">选择漫剧</option>
@@ -1096,7 +1085,7 @@ function renderAdminPanel(adminPanelContainer) {
         </form>
       </section>
 
-      <section class="action-panel ${uiState.activeEpisodeAction === 'delete' ? '' : 'hidden'}">
+      <section class="action-panel ${uiState.activeEpisodeAdminAction === 'delete' ? '' : 'hidden'}">
         <form id="episode-delete-form" class="inline-form">
           <select name="titleName" required>
             <option value="">选择漫剧</option>
@@ -1113,12 +1102,12 @@ function renderAdminPanel(adminPanelContainer) {
 
     document.querySelectorAll('[data-episode-action]').forEach((btn) => {
         btn.onclick = () => {
-            uiState.activeEpisodeAction = btn.dataset.episodeAction;
+            uiState.activeEpisodeAdminAction = btn.dataset.episodeAction;
             render();
         };
     });
 
-    bindMultiSelectSummaryEvents(adminPanelContainer);
+    bindMultiSelectSummaryHandlers(adminPanelContainer);
 
     const episodeCreateForm = document.getElementById('episode-create-form');
     if (episodeCreateForm) {
@@ -1137,7 +1126,7 @@ function renderAdminPanel(adminPanelContainer) {
                     uiState.selectedEpisode = payload.episodeNo;
                 }
                 showFlashMessage('剧集新增成功');
-                await refreshBaseDataAndRender();
+                await reloadBaseDataAndRender();
             } catch (error) {
                 showFlashMessage(error.message);
                 render();
@@ -1164,6 +1153,7 @@ function renderAdminPanel(adminPanelContainer) {
                 name: String(formData.get('name') || '').trim(),
                 poster: String(formData.get('poster') || '').trim(),
                 directoryUrl: String(formData.get('directoryUrl') || '').trim(),
+                // 先取出全部batchTags，再逐项裁剪空白，最后过滤空字符串
                 tags: formData.getAll('batchTags').map((item) => String(item).trim()).filter(Boolean)
             };
 
@@ -1178,7 +1168,7 @@ function renderAdminPanel(adminPanelContainer) {
                 if (getCurrentRouteSeriesName() === payload.name) {
                     uiState.selectedEpisode = 1;
                 }
-                await refreshBaseDataAndRender();
+                await reloadBaseDataAndRender();
             } catch (error) {
                 showFlashMessage(error.message);
                 render();
@@ -1193,9 +1183,10 @@ function renderAdminPanel(adminPanelContainer) {
         const newEpisodeInput = episodeUpdateForm.elements.namedItem('newEpisodeNo');
         const videoUrlInput = episodeUpdateForm.elements.namedItem('videoUrl');
 
-        const syncEpisodeEditFields = () => {
-            const episodes = getEpisodeOptionsForSeries(titleSelect.value);
+        const syncEpisodeEditFormFields = () => {
+            const episodes = getSeriesEpisodeOptions(titleSelect.value);
             const selectedEpisodeNo = Number(episodeSelect.value);
+            // find会从当前漫剧的剧集列表里找出和下拉框集号一致的那一条记录
             const targetEpisode = episodes.find((episode) => episode.episode === selectedEpisodeNo);
 
             if (!targetEpisode) {
@@ -1208,14 +1199,15 @@ function renderAdminPanel(adminPanelContainer) {
             videoUrlInput.value = targetEpisode.videoUrl;
         };
 
-        const syncEpisodeOptions = () => {
-            fillEpisodeSelectForSeries(titleSelect, episodeSelect, '选择集号');
-            syncEpisodeEditFields();
+        const syncEpisodeSelectOptions = () => {
+            // 先刷新集号下拉框，再根据新的选项同步右侧编辑表单
+            populateEpisodeSelectForSeries(titleSelect, episodeSelect, '选择集号');
+            syncEpisodeEditFormFields();
         };
 
-        titleSelect.onchange = syncEpisodeOptions;
-        episodeSelect.onchange = syncEpisodeEditFields;
-        syncEpisodeOptions();
+        titleSelect.onchange = syncEpisodeSelectOptions;
+        episodeSelect.onchange = syncEpisodeEditFormFields;
+        syncEpisodeSelectOptions();
 
         episodeUpdateForm.onsubmit = async (event) => {
             event.preventDefault();
@@ -1231,7 +1223,7 @@ function renderAdminPanel(adminPanelContainer) {
             try {
                 await requestJsonApiOrThrow('/api/episodes', {method: 'PATCH', body: JSON.stringify(payload)});
                 showFlashMessage('剧集信息修改成功');
-                await refreshBaseDataAndRender();
+                await reloadBaseDataAndRender();
             } catch (error) {
                 showFlashMessage(error.message);
                 render();
@@ -1244,12 +1236,12 @@ function renderAdminPanel(adminPanelContainer) {
         const titleSelect = episodeDeleteForm.elements.namedItem('titleName');
         const episodeSelect = episodeDeleteForm.elements.namedItem('episodeNo');
 
-        const syncEpisodeOptions = () => {
-            fillEpisodeSelectForSeries(titleSelect, episodeSelect, '选择集号');
+        const syncEpisodeSelectOptions = () => {
+            populateEpisodeSelectForSeries(titleSelect, episodeSelect, '选择集号');
         };
 
-        titleSelect.onchange = syncEpisodeOptions;
-        syncEpisodeOptions();
+        titleSelect.onchange = syncEpisodeSelectOptions;
+        syncEpisodeSelectOptions();
 
         episodeDeleteForm.onsubmit = async (event) => {
             event.preventDefault();
@@ -1263,7 +1255,7 @@ function renderAdminPanel(adminPanelContainer) {
             try {
                 await requestJsonApiOrThrow('/api/episodes', {method: 'DELETE', body: JSON.stringify(payload)});
                 showFlashMessage('剧集删除成功');
-                await refreshBaseDataAndRender();
+                await reloadBaseDataAndRender();
             } catch (error) {
                 showFlashMessage(error.message);
                 render();
@@ -1277,7 +1269,7 @@ window.addEventListener('popstate', () => {
         render();
         return;
     }
-    loadHomePageSeriesData();
+    loadHomeSeriesPageData();
 });
 render();
-refreshBaseDataAndRender();
+reloadBaseDataAndRender();

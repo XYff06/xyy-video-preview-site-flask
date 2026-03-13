@@ -7,10 +7,10 @@
     <link rel="stylesheet" href="/static/styles.css"/>
 </head>
 <body>
-<!-- 应用挂载点：由 static/app.js 负责整页渲染与事件绑定 -->
+<!-- SPA挂载点: static/app.js会把首页、详情页和管理弹窗都渲染到这里 -->
 <main class="app" id="app"></main>
 
-<!-- 首页模板：标签筛选区 + 漫剧海报网格 -->
+<!-- 首页模板: 标签筛选区和漫剧海报网格 -->
 <template id="home-template">
     <section class="home-page">
         <header class="top-categories" id="category-list"></header>
@@ -18,7 +18,7 @@
     </section>
 </template>
 
-<!-- 详情页模板：视频播放器 + 剧集分页切换 + 元信息 -->
+<!-- 详情模板: 视频播放器、剧集切换和元信息区域 -->
 <template id="detail-template">
     <section class="detail-page">
         <section class="player-wrap">
@@ -33,7 +33,7 @@
     </section>
 </template>
 
-<!-- 前端单页应用逻辑 -->
+<!-- 前端单页应用入口 -->
 <script src="/static/app.js"></script>
 </body>
 </html>
