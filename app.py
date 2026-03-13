@@ -188,36 +188,36 @@ def resolve_resource_to_url(value: str, name: str, local_path_kind: str = 'any')
         if local_path_kind == 'dir':
             raise ValueError('本地路径必须是目录，不能是文件')
         # 给文件名追加时间戳，避免上传到对象存储时重名覆盖
-        filename_with_ts = append_millisecond_timestamp_to_filename(path_object)
-        # 对象存储中的目标 key，例如 posters/a_1712345678901.jpg
-        key = f'{name}/{filename_with_ts}'
-        resp = client.put_object_from_file(bucket_name, key, str(path_object))
-        if getattr(resp, 'status_code', None) != 200:
-            raise ValueError(f'上传失败, status_code={getattr(resp, "status_code", "unknown")}')
-        # 返回上传后可访问的完整 URL。
+        filename_with_timestamp = append_millisecond_timestamp_to_filename(path_object)
+        # 对象存储中的目标key
+        key = f'{name}/{filename_with_timestamp}'
+        response = client.put_object_from_file(bucket_name, key, str(path_object))
+        if getattr(response, 'status_code', None) != 200:
+            raise ValueError(f'上传失败，status_code={getattr(response, "status_code", "unknown")}')
+        # 返回上传后可访问的完整URL
         return f'https://{bucket_name}.{endpoint}/{key}'
 
-    # 目录批量上传分支。
+    # 目录批量上传分支
     if path_object.is_dir():
         if local_path_kind == 'file':
             raise ValueError('本地路径必须是文件，不能是目录')
-        # 收集目录下所有成功上传文件的访问地址。
+        # 收集目录下所有成功上传文件的访问地址
         url_list = []
         for file_path in sorted(path_object.rglob('*')):
-            # 只上传文件，跳过目录节点。
+            # 只上传文件，跳过目录节点
             if not file_path.is_file():
                 continue
 
-            # relative_path 用于保留原目录结构；parent_dir 是相对父目录路径。
+            # relative_path用于保留原目录结构，parent_dir是相对父目录路径。
             relative_path = file_path.relative_to(path_object)
             parent_dir = relative_path.parent.as_posix()
-            filename_with_ts = append_millisecond_timestamp_to_filename(file_path)
+            filename_with_timestamp = append_millisecond_timestamp_to_filename(file_path)
 
             # 如果文件位于子目录下，就把子目录结构一并带到对象存储 key 中。
             if parent_dir and parent_dir != '.':
-                key = f'{name}/{parent_dir}/{filename_with_ts}'
+                key = f'{name}/{parent_dir}/{filename_with_timestamp}'
             else:
-                key = f'{name}/{filename_with_ts}'
+                key = f'{name}/{filename_with_timestamp}'
 
             resp = client.put_object_from_file(bucket_name, key, str(file_path))
             if getattr(resp, 'status_code', None) != 200:
@@ -627,7 +627,7 @@ def api_titles_post():
 
     title_name = request_json['name'].strip()
     try:
-        poster_url = resolve_resource_to_url(request_json['poster'], 'posters', local_path_kind='file')
+        poster_url = resolve_resource_to_url(request_json['poster'], title_name, local_path_kind='file')
     except ValueError as resolve_error:
         return build_json_response(400, message=str(resolve_error))
     selected_tags = [tag_name.strip() for tag_name in request_json.get('tags', []) if is_non_empty_text(tag_name)]
@@ -650,7 +650,7 @@ def api_titles_patch(title_name):
 
     new_name = body['newName'].strip()
     try:
-        poster = resolve_resource_to_url(body['poster'], 'posters', local_path_kind='file')
+        poster = resolve_resource_to_url(body['poster'], new_name, local_path_kind='file')
     except ValueError as exc:
         return build_json_response(400, message=str(exc))
     tags = [tag.strip() for tag in body['tags'] if is_non_empty_text(tag)]
@@ -695,8 +695,8 @@ def api_episodes_batch_directory():
         return build_json_response(400, message='tags 至少需要一个标签')
 
     try:
-        poster = resolve_resource_to_url(poster, f'episodes/{name}/poster', local_path_kind='file')
-        normalized_directory = resolve_resource_to_url(directory_url, f'episodes/{name}/directory', local_path_kind='dir')
+        poster = resolve_resource_to_url(poster, name, local_path_kind='file')
+        normalized_directory = resolve_resource_to_url(directory_url, name, local_path_kind='dir')
     except ValueError as exc:
         return build_json_response(400, message=str(exc))
     if isinstance(normalized_directory, list):
@@ -792,7 +792,7 @@ def api_episodes_post():
     if not title_name or episode_no is None or not raw_video_url:
         return build_json_response(400, message='参数不完整')
     try:
-        video_url = resolve_resource_to_url(raw_video_url, f'episodes/{title_name}', local_path_kind='file')
+        video_url = resolve_resource_to_url(raw_video_url, title_name, local_path_kind='file')
     except ValueError as exc:
         return build_json_response(400, message=str(exc))
     if isinstance(video_url, list):
@@ -829,7 +829,7 @@ def api_episodes_patch():
     if not title_name or source_no is None or target_no is None or not raw_video_url:
         return build_json_response(400, message='参数不完整')
     try:
-        video_url = resolve_resource_to_url(raw_video_url, f'episodes/{title_name}', local_path_kind='file')
+        video_url = resolve_resource_to_url(raw_video_url, title_name, local_path_kind='file')
     except ValueError as exc:
         return build_json_response(400, message=str(exc))
     if isinstance(video_url, list):
