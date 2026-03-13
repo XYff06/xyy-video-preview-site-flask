@@ -134,7 +134,7 @@ body {
  * height: 42px，略高于通用按钮，保证在侧栏里更醒目
  * padding: 0，交给固定尺寸控制按钮外观
  */
-.manage-btn {
+.manage-button {
     width: 100%;
     max-width: 86px;
     height: 42px;
@@ -907,7 +907,7 @@ body {
         align-items: stretch;
     }
 
-    .manage-btn {
+    .manage-button {
         width: 100%;
     }
 
@@ -956,7 +956,7 @@ body {
         grid-template-columns: repeat(4, minmax(0, 1fr));
     }
 
-    .manage-btn {
+    .manage-button {
         width: auto;
         padding: 0 16px;
     }

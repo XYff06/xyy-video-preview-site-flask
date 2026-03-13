@@ -413,7 +413,7 @@ function render() {
         <section id="page-content"></section>
       </section>
       <aside class="side-rail right-rail">
-        <button id="open-admin" class="primary-button manage-btn" type="button">管理</button>
+        <button id="open-admin" class="primary-button manage-button" type="button">管理</button>
       </aside>
     </section>
     ${renderAdminModalHtml()}
