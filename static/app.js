@@ -399,7 +399,7 @@ function render() {
     }
 
     if (uiState.error) {
-        app.innerHTML = `<p>加载失败：${uiState.error}</p>`;
+        app.innerHTML = `<p>加载失败 ----- ${uiState.error}</p>`;
         return;
     }
 
@@ -552,7 +552,7 @@ function renderHome(container) {
     };
 
     if (uiState.homeError) {
-        grid.innerHTML = `<p class="empty-uiState">加载失败：${uiState.homeError}</p>`;
+        grid.innerHTML = `<p class="empty-uiState">加载失败: ${uiState.homeError}</p>`;
     }
 
     if (uiState.homeLoading) {
