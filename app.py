@@ -20,13 +20,13 @@ ROOT_DIRECTORY = Path(__file__).resolve().parent  # 项目根目录
 load_dotenv(ROOT_DIRECTORY / ".env")
 
 
-def get_normalized_environment_variable(name: str):
+def get_normalized_environment_variable(environment_variable_name: str):
     """
     读取环境变量
-    :param name: 环境变量
-    :return: 如果没设置，返回None；如果设置了但strip后还是空，也返回None；否则返回清理后的字符串
+    :param environment_variable_name: 环境变量名
+    :return: None/strip后的环境变量值
     """
-    value = os.getenv(name)
+    value = os.getenv(environment_variable_name)
     if value is None:
         return None
     value = value.strip()
@@ -218,6 +218,15 @@ def handle_unexpected_error(error):
     return build_json_response(500, message=message)
 
 
+def convert_to_iso_datetime(value):
+    """把数据库时间值统一转换成ISO字符串"""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return value
+
+
 def is_non_empty_text(value) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
@@ -237,15 +246,6 @@ def parse_positive_integer_or_default(value, default: int, max_value: int | None
     if max_value is not None:
         return min(parsed, max_value)
     return parsed
-
-
-def convert_to_iso_datetime(value):
-    """把数据库时间值统一转换成 ISO 字符串"""
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value.isoformat()
-    return value
 
 
 def serialize_episode_record(row):
