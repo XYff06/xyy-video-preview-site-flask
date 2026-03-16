@@ -20,6 +20,56 @@ ROOT_DIRECTORY = Path(__file__).resolve().parent  # 项目根目录
 load_dotenv(ROOT_DIRECTORY / ".env")
 
 
+# def query_flat_episode_ingest_records():
+#     """查询按剧集展开的导入记录列表
+#
+#     返回结果已经是管理视图可直接消费的扁平结构
+#     """
+#     with open_db_connection() as conn, conn.cursor() as cur:
+#         cur.execute(
+#             """
+#             SELECT t.name,
+#                    e.episode_no        AS episode,
+#                    t.cover_url         AS poster,
+#                    e.episode_url       AS "videoUrl",
+#                    e.first_ingested_at AS "firstIngestedAt",
+#                    e.updated_at        AS "updatedAt",
+#                    COALESCE(
+#                            ARRAY_AGG(g.tag_name ORDER BY g.sort_no, g.tag_name) FILTER(WHERE g.tag_name IS NOT NULL),
+#                            ARRAY[] ::text[]
+#                    )                   AS tags
+#             FROM title t
+#                      JOIN episode e ON e.title_id = t.id
+#                      LEFT JOIN title_tag tt ON tt.title_id = t.id
+#                      LEFT JOIN tag g ON g.id = tt.tag_id
+#             GROUP BY t.id, e.id
+#             ORDER BY t.name, e.episode_no
+#             """
+#         )
+#         rows = cur.fetchall()
+#     out = []
+#     for row in rows:
+#         # 这里按剧集逐条展开
+#         # 前端管理视图可以直接按行渲染每一集的导入信息
+#         out.append(
+#             {
+#                 "name": row["name"],
+#                 "episode": int(row["episode"]),
+#                 "poster": row["poster"],
+#                 "videoUrl": row["videoUrl"],
+#                 "firstIngestedAt": convert_to_iso_datetime(row["firstIngestedAt"]),
+#                 "updatedAt": convert_to_iso_datetime(row["updatedAt"]),
+#                 "tags": row.get("tags") or [],
+#             }
+#         )
+#     return out
+#
+#
+# @flask_app.route("/api/ingest-records", methods=["GET"])
+# def api_ingest_records():
+#     return build_json_response(200, data=query_flat_episode_ingest_records())
+
+
 def get_normalized_environment_variable(environment_variable_name: str):
     """
     读取环境变量
@@ -227,25 +277,153 @@ def convert_to_iso_datetime(value):
     return value
 
 
-def is_non_empty_text(value) -> bool:
-    return isinstance(value, str) and bool(value.strip())
+@flask_app.route("/api/health", methods=["GET"])
+def api_health():
+    """检查Flask接口是否能正常执行；检查数据库是否可用"""
+    with open_db_connection() as db_connection, db_connection.cursor() as db_cursor:
+        db_cursor.execute("SELECT 1")
+        db_cursor.fetchone()
+    return build_json_response(200, result="ok")
 
 
-def parse_positive_integer_or_default(value, default: int, max_value: int | None = None) -> int:
-    """把输入解析成正整数
-
-    解析失败或结果不合法时回退到默认值
-    可选地把结果限制在最大值以内
+def normalize_positive_int(value, default, max_value=None):
+    """
+    把输入值规范成正整数
+    Args:
+        value:
+            需要解析的输入值
+        default:
+            解析失败或结果不是正整数时返回的默认值
+        max_value:
+            允许的最大值，不为None时，返回值不会超过这个上限
+    Returns:
+        int:
+            规范化后的正整数结果
     """
     try:
         parsed = int(value)
-    except (TypeError, ValueError):
+    except Exception:
         return default
     if parsed <= 0:
         return default
     if max_value is not None:
         return min(parsed, max_value)
     return parsed
+
+
+def query_series_page_data(tag=None, name=None, search=None, sort=None, page=1, page_size=25):
+    """
+    把前端传来的筛选条件转换成SQL:
+    1. 分页选出当前页的漫剧
+    2. 把每部漫剧关联的标签和剧集一起聚合出来
+    3. 最后整理成前端直接能渲染的JSON结构
+    """
+    filters = []  # filters保存WHERE里的条件片段
+    values = []  # values保存这些条件对应的参数值
+
+    # 如果前端传了标签，就把标签值加入参数列表，后面会传给%s占位符
+    if tag:
+        values.append(tag)
+        # 标签筛选只要求当前漫剧至少命中过一次目标标签
+        filters.append(f"""EXISTS ( SELECT 1 FROM title_tag JOIN tag ON tag.id = title_tag.tag_id WHERE title_tag.title_id = t.id AND tag.tag_name = %s )""")
+    if name:
+        values.append(name)
+        filters.append("t.name = %s")
+    if search:
+        # 搜索关键字会先转成小写
+        # 再和 LOWER(name) 做模糊匹配
+        values.append(f"%{search.strip().lower()}%")
+        filters.append("LOWER(t.name) LIKE %s")
+
+    # 没有筛选条件时直接复用同一套 SQL 模板
+    where_clause = f"WHERE {" AND ".join(filters)}" if filters else ""
+    order_by_clause = build_series_order_by_sql(sort)
+    order_by_selected_titles = order_by_clause.replace("t.", "st.")
+
+    with open_db_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT COUNT(*)::int AS total
+            FROM title t
+            {where_clause}
+            """,
+            values,
+        )
+        total = cur.fetchone()["total"] or 0
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        safe_page = min(page, total_pages)
+        offset = (safe_page - 1) * page_size
+
+        # 先选出当前页标题再做聚合
+        # 这样分页针对的是漫剧列表而不是聚合后的宽结果
+        cur.execute(
+            f"""
+            WITH selected_titles AS (
+              SELECT t.id, t.name, t.cover_url, t.first_ingested_at, t.updated_at
+              FROM title t
+              {where_clause}
+              ORDER BY {order_by_clause}
+              LIMIT %s OFFSET %s
+            )
+            SELECT
+              st.id,
+              st.name,
+              st.cover_url AS poster,
+              st.first_ingested_at AS "firstIngestedAt",
+              st.updated_at AS "updatedAt",
+              COALESCE(MAX(e.first_ingested_at), st.first_ingested_at) AS "lastNewEpisodeAt",
+              COALESCE(ARRAY_AGG(DISTINCT g.tag_name) FILTER (WHERE g.tag_name IS NOT NULL), ARRAY[]::text[]) AS tags,
+              COALESCE(
+                JSON_AGG(
+                  JSON_BUILD_OBJECT(
+                    'episode', e.episode_no,
+                    'firstIngestedAt', e.first_ingested_at,
+                    'updatedAt', e.updated_at,
+                    'videoUrl', e.episode_url
+                  ) ORDER BY e.episode_no
+                ) FILTER (WHERE e.id IS NOT NULL),
+                '[]'::json
+              ) AS episodes
+            FROM selected_titles st
+            LEFT JOIN episode e ON e.title_id = st.id
+            LEFT JOIN title_tag tt ON tt.title_id = st.id
+            LEFT JOIN tag g ON g.id = tt.tag_id
+            GROUP BY st.id, st.name, st.cover_url, st.first_ingested_at, st.updated_at
+            ORDER BY {order_by_selected_titles}
+            """,
+            [*values, page_size, offset],
+        )
+        rows = cur.fetchall()
+
+    # 列表推导会把数据库行逐条转换成前端直接可消费的结构
+    data = [serialize_series_record(row) for row in rows]
+    return {
+        "data": data,
+        "pagination": {
+            "total": total,
+            "page": safe_page,
+            "pageSize": page_size,
+            "totalPages": total_pages,
+        },
+    }
+
+
+@flask_app.route("/api/series", methods=["GET"])
+def api_series():
+    """根据前端传来的查询参数，返回"漫剧列表页"需要的数据，支持: 标签筛选、名称筛选、关键字搜索、排序、分页"""
+    payload = query_series_page_data(
+        tag=request.args.get("tag"),
+        name=request.args.get("name"),
+        search=request.args.get("search"),
+        sort=request.args.get("sort"),
+        page=normalize_positive_int(request.args.get("page"), 1),
+        page_size=normalize_positive_int(request.args.get("pageSize"), 25, 100),
+    )
+    return build_json_response(200, **payload)
+
+
+def is_non_empty_text(value) -> bool:
+    return isinstance(value, str) and bool(value.strip())
 
 
 def serialize_episode_record(row):
@@ -409,182 +587,6 @@ def extract_episode_records_from_url_list(video_urls: list[str]):
     for episode_record in episode_records:
         deduplicated_episode_records.setdefault(episode_record["episodeNo"], episode_record)
     return list(deduplicated_episode_records.values())
-
-
-def query_series_page_data(tag=None, name=None, search=None, sort=None, page=1, page_size=25):
-    """按筛选条件查询漫剧分页数据并聚合标签与剧集信息"""
-    filters = []
-    values = []
-
-    if tag:
-        values.append(tag)
-        # 标签筛选只要求当前漫剧至少命中过一次目标标签
-        filters.append(
-            f"""EXISTS (
-                SELECT 1 FROM title_tag tt
-                JOIN tag g ON g.id = tt.tag_id
-                WHERE tt.title_id = t.id AND g.tag_name = %s
-            )"""
-        )
-    if name:
-        values.append(name)
-        filters.append("t.name = %s")
-    if search:
-        # 搜索关键字会先转成小写
-        # 再和 LOWER(name) 做模糊匹配
-        values.append(f"%{search.strip().lower()}%")
-        filters.append("LOWER(t.name) LIKE %s")
-
-    # 没有筛选条件时直接复用同一套 SQL 模板
-    where_clause = f"WHERE {" AND ".join(filters)}" if filters else ""
-    order_by_clause = build_series_order_by_sql(sort)
-    order_by_selected_titles = order_by_clause.replace("t.", "st.")
-
-    with open_db_connection() as conn, conn.cursor() as cur:
-        cur.execute(
-            f"""
-            SELECT COUNT(*)::int AS total
-            FROM title t
-            {where_clause}
-            """,
-            values,
-        )
-        total = cur.fetchone()["total"] or 0
-        total_pages = max(1, (total + page_size - 1) // page_size)
-        safe_page = min(page, total_pages)
-        offset = (safe_page - 1) * page_size
-
-        # 先选出当前页标题再做聚合
-        # 这样分页针对的是漫剧列表而不是聚合后的宽结果
-        cur.execute(
-            f"""
-            WITH selected_titles AS (
-              SELECT t.id, t.name, t.cover_url, t.first_ingested_at, t.updated_at
-              FROM title t
-              {where_clause}
-              ORDER BY {order_by_clause}
-              LIMIT %s OFFSET %s
-            )
-            SELECT
-              st.id,
-              st.name,
-              st.cover_url AS poster,
-              st.first_ingested_at AS "firstIngestedAt",
-              st.updated_at AS "updatedAt",
-              COALESCE(MAX(e.first_ingested_at), st.first_ingested_at) AS "lastNewEpisodeAt",
-              COALESCE(ARRAY_AGG(DISTINCT g.tag_name) FILTER (WHERE g.tag_name IS NOT NULL), ARRAY[]::text[]) AS tags,
-              COALESCE(
-                JSON_AGG(
-                  JSON_BUILD_OBJECT(
-                    "episode", e.episode_no,
-                    "firstIngestedAt", e.first_ingested_at,
-                    "updatedAt", e.updated_at,
-                    "videoUrl", e.episode_url
-                  ) ORDER BY e.episode_no
-                ) FILTER (WHERE e.id IS NOT NULL),
-                "[]"::json
-              ) AS episodes
-            FROM selected_titles st
-            LEFT JOIN episode e ON e.title_id = st.id
-            LEFT JOIN title_tag tt ON tt.title_id = st.id
-            LEFT JOIN tag g ON g.id = tt.tag_id
-            GROUP BY st.id, st.name, st.cover_url, st.first_ingested_at, st.updated_at
-            ORDER BY {order_by_selected_titles}
-            """,
-            [*values, page_size, offset],
-        )
-        rows = cur.fetchall()
-
-    # 列表推导会把数据库行逐条转换成前端直接可消费的结构
-    data = [serialize_series_record(row) for row in rows]
-    return {
-        "data": data,
-        "pagination": {
-            "total": total,
-            "page": safe_page,
-            "pageSize": page_size,
-            "totalPages": total_pages,
-        },
-    }
-
-
-def query_flat_episode_ingest_records():
-    """查询按剧集展开的导入记录列表
-
-    返回结果已经是管理视图可直接消费的扁平结构
-    """
-    with open_db_connection() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT t.name,
-                   e.episode_no        AS episode,
-                   t.cover_url         AS poster,
-                   e.episode_url       AS "videoUrl",
-                   e.first_ingested_at AS "firstIngestedAt",
-                   e.updated_at        AS "updatedAt",
-                   COALESCE(
-                           ARRAY_AGG(g.tag_name ORDER BY g.sort_no, g.tag_name) FILTER(WHERE g.tag_name IS NOT NULL),
-                           ARRAY[] ::text[]
-                   )                   AS tags
-            FROM title t
-                     JOIN episode e ON e.title_id = t.id
-                     LEFT JOIN title_tag tt ON tt.title_id = t.id
-                     LEFT JOIN tag g ON g.id = tt.tag_id
-            GROUP BY t.id, e.id
-            ORDER BY t.name, e.episode_no
-            """
-        )
-        rows = cur.fetchall()
-    out = []
-    for row in rows:
-        # 这里按剧集逐条展开
-        # 前端管理视图可以直接按行渲染每一集的导入信息
-        out.append(
-            {
-                "name": row["name"],
-                "episode": int(row["episode"]),
-                "poster": row["poster"],
-                "videoUrl": row["videoUrl"],
-                "firstIngestedAt": convert_to_iso_datetime(row["firstIngestedAt"]),
-                "updatedAt": convert_to_iso_datetime(row["updatedAt"]),
-                "tags": row.get("tags") or [],
-            }
-        )
-    return out
-
-
-@flask_app.route("/api/health", methods=["GET"])
-def api_health():
-    """健康检查接口
-
-    用于探测服务与数据库是否可用
-    """
-    with open_db_connection() as conn, conn.cursor() as cur:
-        cur.execute("SELECT 1")
-        cur.fetchone()
-    return build_json_response(200, status="ok")
-
-
-@flask_app.route("/api/ingest-records", methods=["GET"])
-def api_ingest_records():
-    return build_json_response(200, data=query_flat_episode_ingest_records())
-
-
-@flask_app.route("/api/series", methods=["GET"])
-def api_series():
-    """漫剧列表接口
-
-    支持标签 关键字 排序和分页查询
-    """
-    payload = query_series_page_data(
-        tag=request.args.get("tag"),
-        name=request.args.get("name"),
-        search=request.args.get("search"),
-        sort=request.args.get("sort"),
-        page=parse_positive_integer_or_default(request.args.get("page"), 1),
-        page_size=parse_positive_integer_or_default(request.args.get("pageSize"), 25, 100),
-    )
-    return build_json_response(200, **payload)
 
 
 @flask_app.route("/api/tags", methods=["GET"])
