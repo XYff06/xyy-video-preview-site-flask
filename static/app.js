@@ -21,6 +21,7 @@ const formatDateTimeZhCN = (iso) => new Date(iso).toLocaleString('zh-CN', {hour1
  * 渲染函数只读取 uiState 决定当前页面应该显示什么
  */
 const uiState = {
+    seriesDetailsByName: {},
     allSeries: [], // 全量漫剧数据 这里保留完整剧集列表
     allTags: [], // 标签全集 优先使用后端独立返回的数据
     selectedTag: null, // 首页当前选中的标签 null 表示全部
@@ -49,6 +50,7 @@ const uiState = {
     activeTitleAdminAction: 'create', // 漫剧管理当前子操作
     activeEpisodeAdminAction: 'create' // 剧集管理当前子操作
 };
+const pendingSeriesDetailRequests = new Map();
 
 /**
  * 读取当前URL Path对应的漫剧名
@@ -75,6 +77,46 @@ async function requestJsonApiOrThrow(requestUrl, requestOptions = {}) {
     return responseJson;
 }
 
+function normalizeSeriesSummaryRecord(seriesRecord) {
+    return {
+        ...seriesRecord,
+        tags: new Set(seriesRecord.tags || [])
+    };
+}
+
+function normalizeSeriesDetailRecord(seriesRecord) {
+    const normalizedDetailRecord = {
+        ...normalizeSeriesSummaryRecord(seriesRecord),
+        episodes: normalizeEpisodeRecords(seriesRecord.episodes || [])
+    };
+    uiState.seriesDetailsByName[normalizedDetailRecord.name] = normalizedDetailRecord;
+    return normalizedDetailRecord;
+}
+
+function getSeriesSummaryByName(titleName) {
+    return uiState.allSeries.find((series) => series.name === titleName) || null;
+}
+
+async function loadSeriesDetailByName(titleName, forceReload = false) {
+    if (!titleName) return null;
+    if (!forceReload && uiState.seriesDetailsByName[titleName]) {
+        return uiState.seriesDetailsByName[titleName];
+    }
+    if (!forceReload && pendingSeriesDetailRequests.has(titleName)) {
+        return pendingSeriesDetailRequests.get(titleName);
+    }
+
+    const detailRequest = requestJsonApiOrThrow(`/api/series/${encodeURIComponent(titleName)}`)
+        .then((payload) => {
+            return payload.data ? normalizeSeriesDetailRecord(payload.data) : null;
+        })
+        .finally(() => {
+            pendingSeriesDetailRequests.delete(titleName);
+        });
+    pendingSeriesDetailRequests.set(titleName, detailRequest);
+    return detailRequest;
+}
+
 /**
  * 刷新漫剧和标签基础数据
  *
@@ -82,24 +124,22 @@ async function requestJsonApiOrThrow(requestUrl, requestOptions = {}) {
  * 如果当前在首页 还会继续补拉首页自己的分页结果
  */
 async function reloadBaseDataAndRender() {
+    const activeSeriesName = getCurrentRouteSeriesName();
     try {
         /**
          * 并发拉取漫剧列表和标签列表
          * 两份数据都返回后再一起写入状态
          * 这样页面不会出现只更新一半的中间态
          */
-        const [seriesListResponse, tagListResponse] = await Promise.all([requestJsonApiOrThrow('/api/series?page=1&pageSize=10000'), requestJsonApiOrThrow('/api/tags')]);
+        const [titleListResponse, tagListResponse] = await Promise.all([requestJsonApiOrThrow('/api/titles'), requestJsonApiOrThrow('/api/tags')]);
         uiState.allTags = tagListResponse.data;
         /**
          * 这里会把后端返回的数据再做一次前端侧归一化
          * tags 转成 Set 便于后面快速判断是否包含某个标签
          * episodes 交给 normalizeEpisodeRecords 统一去重 排序和集号格式
          */
-        uiState.allSeries = seriesListResponse.data.map((seriesRecord) => ({
-            ...seriesRecord,
-            tags: new Set(seriesRecord.tags),
-            episodes: normalizeEpisodeRecords(seriesRecord.episodes || [])
-        }));
+        uiState.allSeries = titleListResponse.data.map(normalizeSeriesSummaryRecord);
+        uiState.seriesDetailsByName = {};
 
         /**
          * 基础数据刷新成功后
@@ -114,6 +154,8 @@ async function reloadBaseDataAndRender() {
          */
         uiState.loading = false;
         uiState.error = error.message;
+        render();
+        return;
     }
     /**
      * 无论成功还是失败都先走一次 render
@@ -125,9 +167,18 @@ async function reloadBaseDataAndRender() {
      * 首页展示列表使用的是另一套带分页的查询结果
      * 所以首页场景还需要继续补拉一次首页专用数据
      */
-    if (!getCurrentRouteSeriesName()) {
-        await loadHomeSeriesPageData();
+    if (activeSeriesName) {
+        try {
+            await loadSeriesDetailByName(activeSeriesName, true);
+        } catch (error) {
+            uiState.error = error.message;
+            render();
+            return;
+        }
+        render();
+        return;
     }
+    await loadHomeSeriesPageData();
 }
 
 /**
@@ -152,9 +203,7 @@ async function loadHomeSeriesPageData() {
 
     try {
         const payload = await requestJsonApiOrThrow(`/api/series?${params.toString()}`);
-        uiState.homeSeries = payload.data.map((item) => ({
-            ...item, episodes: normalizeEpisodeRecords(item.episodes || [])
-        }));
+        uiState.homeSeries = payload.data.map(normalizeSeriesSummaryRecord);
         uiState.homeTotal = payload.pagination?.total ?? payload.data.length;
         uiState.currentPage = payload.pagination?.page ?? uiState.currentPage;
         uiState.homeLoading = false;
@@ -257,10 +306,10 @@ function normalizeEpisodeRecords(episodes) {
  * @param {string} titleName - 漫剧名称
  * @returns {Array<Object>} 可用于下拉框的剧集列表
  */
-function getSeriesEpisodeOptions(titleName) {
-    const matchedSeries = uiState.allSeries.find((series) => series.name === titleName);
-    if (!matchedSeries) return [];
-    return normalizeEpisodeRecords(matchedSeries.episodes);
+async function getSeriesEpisodeOptions(titleName) {
+    const matchedSeriesDetail = await loadSeriesDetailByName(titleName);
+    if (!matchedSeriesDetail) return [];
+    return matchedSeriesDetail.episodes;
 }
 
 /**
@@ -318,8 +367,8 @@ function bindMultiSelectSummaryHandlers(scope) {
 /**
  * 根据当前选中的漫剧刷新集号下拉框
  */
-function populateEpisodeSelectForSeries(titleSelect, episodeSelect, placeholderText) {
-    const episodes = getSeriesEpisodeOptions(titleSelect.value);
+async function populateEpisodeSelectForSeries(titleSelect, episodeSelect, placeholderText) {
+    const episodes = await getSeriesEpisodeOptions(titleSelect.value);
     // map 会把每个剧集对象转换成 option 字符串
     // join 后再一次性写回下拉框
     episodeSelect.innerHTML = `<option value="">${placeholderText}</option>${episodes
@@ -467,12 +516,23 @@ function render() {
     const pageContent = document.getElementById('page-content');
     const activeName = getCurrentRouteSeriesName();
     if (activeName) {
-        const series = uiState.allSeries.find((s) => s.name === activeName);
+        const series = uiState.seriesDetailsByName[activeName];
         if (series) {
             renderDetail(pageContent, series);
         } else {
-            history.replaceState({}, '', '/');
-            renderHome(pageContent);
+            pageContent.innerHTML = '<p class="empty-uiState">正在加载详情...</p>';
+            loadSeriesDetailByName(activeName)
+                .then((loadedSeries) => {
+                    if (getCurrentRouteSeriesName() !== activeName) return;
+                    if (!loadedSeries) {
+                        history.replaceState({}, '', '/');
+                    }
+                    render();
+                })
+                .catch((error) => {
+                    if (getCurrentRouteSeriesName() !== activeName) return;
+                    pageContent.innerHTML = `<p class="empty-uiState">加载详情失败: ${escapeHtml(error.message)}</p>`;
+                });
         }
     } else {
         renderHome(pageContent);
@@ -563,8 +623,8 @@ function renderHome(container) {
     const pageSeries = uiState.homeSeries;
 
     pageSeries.forEach((series) => {
-        const maxEpisode = Math.max(...series.episodes.map((ep) => Number(ep.episode) || 0), 0);
-        const totalEpisodes = series.episodes.length;
+        const maxEpisode = Number(series.currentMaxEpisodeNo) || 0;
+        const totalEpisodes = Number(series.totalEpisodeCount) || 0;
         const card = document.createElement('article');
         card.className = 'poster-card';
         card.innerHTML = `
@@ -574,7 +634,7 @@ function renderHome(container) {
       `;
         card.onclick = () => {
             history.pushState({}, '', `/${encodeURIComponent(series.name)}`);
-            uiState.selectedEpisode = series.episodes[0]?.episode ?? null;
+            uiState.selectedEpisode = null;
             render();
         };
         grid.appendChild(card);
@@ -1007,7 +1067,7 @@ function renderAdminPanel(adminPanelContainer) {
             const fillTitleEditFields = (titleName) => {
                 // 选中某个漫剧后
                 // 把它当前的名称 海报和标签回填到编辑表单
-                const targetSeries = uiState.allSeries.find((series) => series.name === titleName);
+                const targetSeries = getSeriesSummaryByName(titleName);
                 if (!targetSeries) return;
                 newNameInput.value = targetSeries.name;
                 newPosterInput.value = targetSeries.poster;
@@ -1227,8 +1287,8 @@ function renderAdminPanel(adminPanelContainer) {
         const newEpisodeInput = episodeUpdateForm.elements.namedItem('newEpisodeNo');
         const videoUrlInput = episodeUpdateForm.elements.namedItem('videoUrl');
 
-        const syncEpisodeEditFormFields = () => {
-            const episodes = getSeriesEpisodeOptions(titleSelect.value);
+        const syncEpisodeEditFormFields = async () => {
+            const episodes = await getSeriesEpisodeOptions(titleSelect.value);
             const selectedEpisodeNo = Number(episodeSelect.value);
             // find 会从当前漫剧的剧集列表里
             // 找出和下拉框集号一致的那一条记录
@@ -1244,11 +1304,11 @@ function renderAdminPanel(adminPanelContainer) {
             videoUrlInput.value = targetEpisode.videoUrl;
         };
 
-        const syncEpisodeSelectOptions = () => {
+        const syncEpisodeSelectOptions = async () => {
             // 先刷新集号下拉框
             // 再根据新的选项同步右侧编辑表单
-            populateEpisodeSelectForSeries(titleSelect, episodeSelect, '选择集号');
-            syncEpisodeEditFormFields();
+            await populateEpisodeSelectForSeries(titleSelect, episodeSelect, '选择集号');
+            await syncEpisodeEditFormFields();
         };
 
         titleSelect.onchange = syncEpisodeSelectOptions;
@@ -1282,9 +1342,9 @@ function renderAdminPanel(adminPanelContainer) {
         const titleSelect = episodeDeleteForm.elements.namedItem('titleName');
         const episodeSelect = episodeDeleteForm.elements.namedItem('episodeNo');
 
-        const syncEpisodeSelectOptions = () => {
+        const syncEpisodeSelectOptions = async () => {
             // 删除表单只需要跟随漫剧切换刷新集号选项
-            populateEpisodeSelectForSeries(titleSelect, episodeSelect, '选择集号');
+            await populateEpisodeSelectForSeries(titleSelect, episodeSelect, '选择集号');
         };
 
         titleSelect.onchange = syncEpisodeSelectOptions;

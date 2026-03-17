@@ -19,6 +19,9 @@ flask_app = Flask(__name__, template_folder="templates", static_folder="static")
 flask_app.config["JSON_AS_ASCII"] = False
 ROOT_DIRECTORY = Path(__file__).resolve().parent  # 项目根目录
 load_dotenv(ROOT_DIRECTORY / ".env")
+SERIES_PAGE_CACHE_TTL_SECONDS = 3
+SERIES_PAGE_CACHE_MAX_ENTRIES = 32
+series_page_query_cache = {}
 
 
 # def query_flat_episode_ingest_records():
@@ -252,6 +255,9 @@ def append_millisecond_timestamp_to_filename(path_object: Path) -> str:
 
 def build_json_response(status: int, **payload):
     """构造统一的JSON响应对象并写入状态码"""
+    if request.method != "GET" and 200 <= status < 400:
+        # 成功的写操作会改变series列表结果，这里统一清空短TTL缓存
+        invalidate_series_page_cache()
     response = jsonify(payload)
     response.status_code = status
     return response
@@ -325,6 +331,44 @@ def build_series_order_by_sql(sort: str | None) -> str:
     return sort_map.get(sort or "", sort_map["updated_desc"])
 
 
+def build_series_page_cache_key(tag=None, name=None, search=None, sort=None, page=1, page_size=25):
+    """把分页查询参数整理成稳定缓存键，命中后可以直接复用列表结果"""
+    normalized_search = search.strip().lower() if isinstance(search, str) and search.strip() else None
+    return tag, name, normalized_search, sort or "updated_desc", page, page_size
+
+
+def get_cached_series_page_payload(cache_key):
+    """读取仍在有效期内的列表缓存，过期项会顺手清掉"""
+    cached_entry = series_page_query_cache.get(cache_key)
+    if not cached_entry:
+        return None
+
+    expires_at, payload = cached_entry
+    if expires_at <= time.monotonic():
+        series_page_query_cache.pop(cache_key, None)
+        return None
+    return payload
+
+
+def store_series_page_payload(cache_key, payload):
+    """写入列表缓存前先清理过期项，再限制缓存条目数量"""
+    current_time = time.monotonic()
+    expired_keys = [key for key, (expires_at, _) in series_page_query_cache.items() if expires_at <= current_time]
+    for expired_key in expired_keys:
+        series_page_query_cache.pop(expired_key, None)
+
+    while len(series_page_query_cache) >= SERIES_PAGE_CACHE_MAX_ENTRIES:
+        oldest_key = next(iter(series_page_query_cache))
+        series_page_query_cache.pop(oldest_key, None)
+
+    series_page_query_cache[cache_key] = (current_time + SERIES_PAGE_CACHE_TTL_SECONDS, payload)
+
+
+def invalidate_series_page_cache():
+    """标题 标签 剧集发生写入后清空分页缓存，避免读到旧结果"""
+    series_page_query_cache.clear()
+
+
 def serialize_series_record(row):
     """把聚合后的漫剧记录转换成前端可直接渲染的结构"""
     episodes = row.get("episodes") or []
@@ -349,7 +393,34 @@ def serialize_series_record(row):
     }
 
 
+def serialize_series_list_record(row):
+    """把列表查询结果整理成首页卡片可直接消费的结构"""
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "poster": row["poster"],
+        "firstIngestedAt": convert_to_iso_datetime(row["firstIngestedAt"]),
+        "updatedAt": convert_to_iso_datetime(row["updatedAt"]),
+        "lastNewEpisodeAt": convert_to_iso_datetime(row["lastNewEpisodeAt"]),
+        "tags": row.get("tags") or [],
+        "totalEpisodeCount": int(row.get("totalEpisodeCount") or 0),
+        "currentMaxEpisodeNo": int(row.get("currentMaxEpisodeNo") or 0),
+    }
+
+
+def serialize_series_detail_record(row):
+    """把详情查询结果整理成详情页可直接消费的结构"""
+    payload = serialize_series_record(row)
+    payload["totalEpisodeCount"] = int(row.get("totalEpisodeCount") or len(payload["episodes"]))
+    payload["currentMaxEpisodeNo"] = int(row.get("currentMaxEpisodeNo") or 0)
+    return payload
+
+
 def query_series_page_data(tag=None, name=None, search=None, sort=None, page=1, page_size=25):
+    cache_key = build_series_page_cache_key(tag=tag, name=name, search=search, sort=sort, page=page, page_size=page_size)
+    cached_payload = get_cached_series_page_payload(cache_key)
+    if cached_payload is not None:
+        return cached_payload
     """
     把前端传来的筛选条件转换成SQL:
     1. 分页选出当前页的漫剧
@@ -374,7 +445,7 @@ def query_series_page_data(tag=None, name=None, search=None, sort=None, page=1, 
 
     where_clause = f"WHERE {" AND ".join(filters)}" if filters else ""
     order_by_clause = build_series_order_by_sql(sort)
-    order_by_selected_titles = order_by_clause.replace("title.", "selected_titles.")
+    order_by_selected_titles = order_by_clause.replace("title.", "paged_titles.")
 
     with open_db_connection() as db_connection, db_connection.cursor() as db_cursor:
         db_cursor.execute(f"""SELECT COUNT(*)::int AS total FROM title {where_clause}""", values, )
@@ -383,28 +454,45 @@ def query_series_page_data(tag=None, name=None, search=None, sort=None, page=1, 
         safe_page = max(1, min(page, total_pages))
         offset = (safe_page - 1) * page_size
 
+        # 先分页拿到当前页title，再分别按title聚合剧集和标签，避免episode和tag做JOIN后放大结果集
         db_cursor.execute(
             f"""
-            WITH selected_titles AS (SELECT title.id, title.name, title.cover_url, title.first_ingested_at, title.updated_at FROM title {where_clause} ORDER BY {order_by_clause} LIMIT %s OFFSET %s)
+            WITH paged_titles AS (
+              SELECT
+                title.id,
+                title.name,
+                title.cover_url,
+                title.first_ingested_at,
+                title.last_new_episode_at,
+                title.updated_at,
+                title.total_episode_count,
+                title.current_max_episode_no
+              FROM title
+              {where_clause}
+              ORDER BY {order_by_clause}
+              LIMIT %s OFFSET %s
+            )
             SELECT
-              selected_titles.id,
-              selected_titles.name,
-              selected_titles.cover_url AS poster,
-              selected_titles.first_ingested_at AS firstIngestedAt,
-              selected_titles.updated_at AS updatedAt,
-              COALESCE(MAX(episode.first_ingested_at), selected_titles.first_ingested_at) AS lastNewEpisodeAt,
-              COALESCE(ARRAY_AGG(DISTINCT tag.tag_name) FILTER (WHERE tag.tag_name IS NOT NULL), ARRAY[]::text[]) AS tags,
-              COALESCE(JSON_AGG(JSON_BUILD_OBJECT('episode', episode.episode_no, 'firstIngestedAt', episode.first_ingested_at, 'updatedAt', episode.updated_at, 'videoUrl', episode.episode_url) ORDER BY episode.episode_no) FILTER (WHERE episode.id IS NOT NULL), '[]'::json) AS episodes
-            FROM selected_titles
-            LEFT JOIN episode ON episode.title_id = selected_titles.id
-            LEFT JOIN title_tag ON title_tag.title_id = selected_titles.id
-            LEFT JOIN tag ON tag.id = title_tag.tag_id
-            GROUP BY
-              selected_titles.id,
-              selected_titles.name,
-              selected_titles.cover_url,
-              selected_titles.first_ingested_at,
-              selected_titles.updated_at
+              paged_titles.id,
+              paged_titles.name,
+              paged_titles.cover_url AS poster,
+              paged_titles.first_ingested_at AS firstIngestedAt,
+              paged_titles.updated_at AS updatedAt,
+              paged_titles.total_episode_count AS totalEpisodeCount,
+              paged_titles.current_max_episode_no AS currentMaxEpisodeNo,
+              paged_titles.last_new_episode_at AS lastNewEpisodeAt,
+              COALESCE(tag_summary.tags, ARRAY[]::text[]) AS tags
+            FROM paged_titles
+            LEFT JOIN LATERAL (
+              SELECT
+                COALESCE(
+                  ARRAY_AGG(tag.tag_name ORDER BY tag.sort_no, tag.tag_name),
+                  ARRAY[]::text[]
+                ) AS tags
+              FROM title_tag
+              JOIN tag ON tag.id = title_tag.tag_id
+              WHERE title_tag.title_id = paged_titles.id
+            ) AS tag_summary ON TRUE
             ORDER BY {order_by_selected_titles}
             """,
             [*values, page_size, offset],
@@ -412,8 +500,8 @@ def query_series_page_data(tag=None, name=None, search=None, sort=None, page=1, 
         rows = db_cursor.fetchall()
 
     # 列表推导会把数据库行逐条转换成前端直接可消费的结构
-    data = [serialize_series_record(row) for row in rows]
-    return {
+    data = [serialize_series_list_record(row) for row in rows]
+    payload = {
         "data": data,
         "pagination": {
             "total": total,
@@ -422,6 +510,60 @@ def query_series_page_data(tag=None, name=None, search=None, sort=None, page=1, 
             "totalPages": total_pages,
         },
     }
+    store_series_page_payload(cache_key, payload)
+    return payload
+
+
+def query_series_detail_data(title_name: str):
+    """按标题名返回单个漫剧详情，包含完整剧集列表"""
+    with open_db_connection() as db_connection, db_connection.cursor() as db_cursor:
+        db_cursor.execute(
+            """
+            SELECT
+              title.id,
+              title.name,
+              title.cover_url AS poster,
+              title.first_ingested_at AS firstIngestedAt,
+              title.last_new_episode_at AS lastNewEpisodeAt,
+              title.updated_at AS updatedAt,
+              title.total_episode_count AS totalEpisodeCount,
+              title.current_max_episode_no AS currentMaxEpisodeNo,
+              COALESCE(tag_summary.tags, ARRAY[]::text[]) AS tags,
+              COALESCE(episode_summary.episodes, '[]'::json) AS episodes
+            FROM title
+            LEFT JOIN LATERAL (
+              SELECT
+                COALESCE(
+                  JSON_AGG(
+                    JSON_BUILD_OBJECT(
+                      'episode', episode.episode_no,
+                      'firstIngestedAt', episode.first_ingested_at,
+                      'updatedAt', episode.updated_at,
+                      'videoUrl', episode.episode_url
+                    )
+                    ORDER BY episode.episode_no
+                  ) FILTER (WHERE episode.id IS NOT NULL),
+                  '[]'::json
+                ) AS episodes
+              FROM episode
+              WHERE episode.title_id = title.id
+            ) AS episode_summary ON TRUE
+            LEFT JOIN LATERAL (
+              SELECT
+                COALESCE(
+                  ARRAY_AGG(tag.tag_name ORDER BY tag.sort_no, tag.tag_name),
+                  ARRAY[]::text[]
+                ) AS tags
+              FROM title_tag
+              JOIN tag ON tag.id = title_tag.tag_id
+              WHERE title_tag.title_id = title.id
+            ) AS tag_summary ON TRUE
+            WHERE title.name = %s
+            """,
+            (title_name,),
+        )
+        row = db_cursor.fetchone()
+    return serialize_series_detail_record(row) if row else None
 
 
 @flask_app.route("/api/series", methods=["GET"])
@@ -436,6 +578,15 @@ def api_series():
         page_size=normalize_positive_int(request.args.get("pageSize"), 25, 100),
     )
     return build_json_response(200, **payload)
+
+
+@flask_app.route("/api/series/<path:title_name>", methods=["GET"])
+def api_series_detail(title_name):
+    """按标题名返回单个漫剧详情"""
+    payload = query_series_detail_data(unquote(title_name))
+    if not payload:
+        return build_json_response(404, message="漫剧不存在")
+    return build_json_response(200, data=payload)
 
 
 def is_non_empty_text(value) -> bool:
@@ -574,6 +725,30 @@ def api_tags_get():
         db_cursor.execute("SELECT tag_name FROM tag ORDER BY sort_no ASC, tag_name ASC")
         tag_rows = db_cursor.fetchall()
     return build_json_response(200, data=[tag_row["tag_name"] for tag_row in tag_rows])
+
+
+@flask_app.route("/api/titles", methods=["GET"])
+def api_titles_get():
+    """返回管理面板和详情路由需要的轻量标题列表，不带剧集聚合结果"""
+    with open_db_connection() as db_connection, db_connection.cursor() as db_cursor:
+        db_cursor.execute(
+            """
+            SELECT
+              title.name,
+              title.cover_url AS poster,
+              COALESCE(
+                ARRAY_AGG(tag.tag_name ORDER BY tag.sort_no, tag.tag_name) FILTER (WHERE tag.tag_name IS NOT NULL),
+                ARRAY[]::text[]
+              ) AS tags
+            FROM title
+            LEFT JOIN title_tag ON title_tag.title_id = title.id
+            LEFT JOIN tag ON tag.id = title_tag.tag_id
+            GROUP BY title.id, title.name, title.cover_url
+            ORDER BY title.name ASC
+            """
+        )
+        title_rows = db_cursor.fetchall()
+    return build_json_response(200, data=title_rows)
 
 
 @flask_app.route("/api/tags", methods=["POST"])

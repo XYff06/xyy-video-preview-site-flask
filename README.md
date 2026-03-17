@@ -71,7 +71,9 @@ http://127.0.0.1:4173
 - `GET /api/health`
 - `GET /api/ingest-records`
 - `GET /api/series`
+- `GET /api/series/<title_name>`
 - `GET /api/tags`
+- `GET /api/titles`
 - `POST /api/tags`
 - `PATCH /api/tags/<tag_name>`
 - `DELETE /api/tags/<tag_name>`
