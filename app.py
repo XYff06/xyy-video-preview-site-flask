@@ -17,11 +17,158 @@ from psycopg.rows import dict_row
 
 flask_app = Flask(__name__, template_folder="templates", static_folder="static")
 flask_app.config["JSON_AS_ASCII"] = False
-ROOT_DIRECTORY = Path(__file__).resolve().parent  # 项目根目录
-load_dotenv(ROOT_DIRECTORY / ".env")
+
 SERIES_PAGE_CACHE_TTL_SECONDS = 3
 SERIES_PAGE_CACHE_MAX_ENTRIES = 32
 series_page_query_cache = {}
+
+"""load_dotenv"""
+ROOT_DIRECTORY = Path(__file__).resolve().parent
+load_dotenv(ROOT_DIRECTORY / ".env")
+
+
+def get_normalized_environment_variable(environment_variable_name: str):
+    """
+    读取环境变量
+    :param environment_variable_name: 环境变量名
+    :return: os.getenv(environment_variable_name).strip() or None
+    """
+    value = os.getenv(environment_variable_name)
+    if value is None:
+        return None
+    value = value.strip()
+    return value or None
+
+
+def build_postgresql_connection_url() -> str:
+    """
+    从环境变量读取PostgreSQL连接信息，然后拼接成连接数据库用的DSN字符串
+    :return: 配置了密码，return postgresql://user:password@host:port/database；没有配置密码，return postgresql://user@host:port/database
+    """
+    postgresql_host = get_normalized_environment_variable("POSTGRESQL_HOST")
+    postgresql_port = get_normalized_environment_variable("POSTGRESQL_PORT")
+    postgresql_user = get_normalized_environment_variable("POSTGRESQL_USER")
+    postgresql_password = get_normalized_environment_variable("POSTGRESQL_PASSWORD")
+    postgresql_database = get_normalized_environment_variable("POSTGRESQL_DATABASE")
+    if postgresql_password:
+        return f"postgresql://{postgresql_user}:{postgresql_password}@{postgresql_host}:{postgresql_port}/{postgresql_database}"
+    return f"postgresql://{postgresql_user}@{postgresql_host}:{postgresql_port}/{postgresql_database}"
+
+
+@contextmanager
+def open_db_connection():
+    """
+    打开一个PostgreSQL数据库连接，这里会创建一个新的数据库连接，并把查询结果设置为字典行格式，使用结束后会自动关闭这个连接
+    :return: psycopg.Connection: 当前打开的数据库连接对象
+    """
+    db_connection = psycopg.connect(build_postgresql_connection_url(), row_factory=dict_row, )
+    try:
+        yield db_connection
+    finally:
+        db_connection.close()
+
+
+@contextmanager
+def open_db_connection_in_transaction():
+    """
+    打开一个带事务的PostgreSQL数据库连接，这里会先创建数据库连接，然后在这个连接上开启事务
+
+    with代码块里的数据库操作都会运行在同一个事务中:
+    1. 如果代码块正常结束，这个事务会提交
+    2. 如果代码块抛出异常，这个事务会回滚
+    :return: psycopg.Connection: 当前处于事务中的数据库连接对象
+    """
+    with open_db_connection() as db_connection:
+        with db_connection.transaction():
+            yield db_connection
+
+
+def build_json_response(status: int, **payload):
+    """构造统一的JSON响应对象并写入状态码"""
+    response = jsonify(payload)
+    response.status_code = status
+    return response
+
+
+def is_valid_text(value) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+@flask_app.route("/api/tags", methods=["GET"])
+def api_tags_get():
+    """查询全部标签，从tag表里查出所有tag_name，按tag_name升序排序，把查询结果整理成纯字符串列表返回给前端"""
+    # 打开数据库连接并创建游标对象，with结束后连接和游标都会自动关闭
+    with open_db_connection() as db_connection, db_connection.cursor() as db_cursor:
+        db_cursor.execute("SELECT tag_name FROM tag ORDER BY tag_name ASC")
+        tag_rows = db_cursor.fetchall()
+    return build_json_response(200, data=[tag_row["tag_name"] for tag_row in tag_rows])
+
+
+@flask_app.route("/api/tags", methods=["POST"])
+def api_tags_post():
+    """创建标签"""
+    # 尝试把请求体解析成JSON，如果解析失败、请求体为空或者不是合法JSON，return {}
+    request_body = request.get_json(silent=True) or {}
+
+    # 校验tagName是否有效
+    if not is_valid_text(request_body.get("tagName")):
+        return build_json_response(400, message="无效tagName")
+
+    created_tag_name = request_body["tagName"].strip()
+    try:
+        # 打开带事务的数据库连接，这段插入要么成功提交，要么失败回滚
+        with open_db_connection_in_transaction() as db_connection, db_connection.cursor() as db_cursor:
+            # 向tag表插入一条新标签记录
+            db_cursor.execute("INSERT INTO tag(tag_name) VALUES (%s)", (created_tag_name,))
+    except UniqueViolation:
+        return build_json_response(409, message=f"<{created_tag_name}>标签已存在")
+
+    # 创建成功后返回201
+    # data里顺手回传创建成功的标签名，前端可以直接复用
+    return build_json_response(201, message=f"<{created_tag_name}>标签已创建，请为剧集分配此标签", data=created_tag_name)
+
+
+@flask_app.route("/api/tags/<path:tag_name>", methods=["PATCH"])
+def api_tags_patch(tag_name):
+    """重命名标签"""
+    request_body = request.get_json(silent=True) or {}
+    # 校验newTagName是否有效
+    if not is_valid_text(request_body.get("newTagName")):
+        return build_json_response(400, message="无效newTagName")
+    # 取出去空白后的新标签名
+    new_tag_name = request_body["newTagName"].strip()
+    try:
+        # 打开事务
+        with open_db_connection_in_transaction() as conn, conn.cursor() as cur:
+            # 把原标签名改成新标签名
+            # WHERE tag_name = %s会只更新目标标签
+            cur.execute("UPDATE tag SET tag_name = %s WHERE tag_name = %s", (new_tag_name, tag_name))
+
+            # 如果影响行数是0，说明原标签不存在
+            if cur.rowcount == 0:
+                return build_json_response(404, message="标签不存在")
+    except UniqueViolation:
+        # 如果新标签名已经被别的标签占用，就会触发唯一约束冲突
+        return build_json_response(409, message="标签已存在")
+
+    # 改名成功
+    return build_json_response(200, message="标签改名成功")
+
+
+@flask_app.route("/api/tags/<path:tag_name>", methods=["DELETE"])
+def api_tags_delete(tag_name):
+    """删除标签"""
+    # 打开事务
+    with open_db_connection_in_transaction() as conn, conn.cursor() as cur:
+        # 按标签名删除对应记录
+        cur.execute("DELETE FROM tag WHERE tag_name = %s", (tag_name,))
+
+        # 如果没有删到任何行，说明标签不存在
+        if cur.rowcount == 0:
+            return build_json_response(404, message="标签不存在")
+
+    # 删除成功
+    return build_json_response(200, message="标签已删除")
 
 
 # def query_flat_episode_ingest_records():
@@ -72,62 +219,6 @@ series_page_query_cache = {}
 # @flask_app.route("/api/ingest-records", methods=["GET"])
 # def api_ingest_records():
 #     return build_json_response(200, data=query_flat_episode_ingest_records())
-
-
-def get_normalized_environment_variable(environment_variable_name: str):
-    """
-    读取环境变量
-    :param environment_variable_name: 环境变量名
-    :return: None/strip后的环境变量值
-    """
-    value = os.getenv(environment_variable_name)
-    if value is None:
-        return None
-    value = value.strip()
-    return value or None
-
-
-def build_postgresql_connection_url() -> str:
-    """
-    从环境变量读取PostgreSQL连接信息，然后拼接成连接数据库用的DSN字符串
-    :return: 配置了密码，return postgresql://user:password@host:port/database；没有配置密码，return postgresql://user@host:port/database
-    """
-    postgresql_host = get_normalized_environment_variable("POSTGRESQL_HOST")
-    postgresql_port = get_normalized_environment_variable("POSTGRESQL_PORT")
-    postgresql_user = get_normalized_environment_variable("POSTGRESQL_USER")
-    postgresql_password = get_normalized_environment_variable("POSTGRESQL_PASSWORD")
-    postgresql_database = get_normalized_environment_variable("POSTGRESQL_DATABASE")
-    if postgresql_password:
-        return f"postgresql://{postgresql_user}:{postgresql_password}@{postgresql_host}:{postgresql_port}/{postgresql_database}"
-    return f"postgresql://{postgresql_user}@{postgresql_host}:{postgresql_port}/{postgresql_database}"
-
-
-@contextmanager
-def open_db_connection():
-    """
-    打开一个PostgreSQL数据库连接，这里会创建一个新的数据库连接，并把查询结果设置为字典行格式，使用结束后会自动关闭这个连接
-    :return: psycopg.Connection: 当前打开的数据库连接对象
-    """
-    db_connection = psycopg.connect(build_postgresql_connection_url(), row_factory=dict_row, )
-    try:
-        yield db_connection
-    finally:
-        db_connection.close()
-
-
-@contextmanager
-def open_db_connection_in_transaction():
-    """
-    打开一个带事务的PostgreSQL数据库连接，这里会先创建数据库连接，然后在这个连接上开启事务
-
-    with代码块里的数据库操作都会运行在同一个事务中:
-    1. 如果代码块正常结束，这个事务会提交
-    2. 如果代码块抛出异常，这个事务会回滚
-    :return: psycopg.Connection: 当前处于事务中的数据库连接对象
-    """
-    with open_db_connection() as db_connection:
-        with db_connection.transaction():
-            yield db_connection
 
 
 def get_required_oss_config():
@@ -251,16 +342,6 @@ def append_millisecond_timestamp_to_filename(path_object: Path) -> str:
         return f"{base_name}_{timestamp}{suffixes}"
 
     return f"{path_object.name}_{timestamp}"
-
-
-def build_json_response(status: int, **payload):
-    """构造统一的JSON响应对象并写入状态码"""
-    if request.method != "GET" and 200 <= status < 400:
-        # 成功的写操作会改变series列表结果，这里统一清空短TTL缓存
-        invalidate_series_page_cache()
-    response = jsonify(payload)
-    response.status_code = status
-    return response
 
 
 @flask_app.errorhandler(Exception)
@@ -519,45 +600,41 @@ def query_series_detail_data(title_name: str):
     with open_db_connection() as db_connection, db_connection.cursor() as db_cursor:
         db_cursor.execute(
             """
-            SELECT
-              title.id,
-              title.name,
-              title.cover_url AS poster,
-              title.first_ingested_at AS firstIngestedAt,
-              title.last_new_episode_at AS lastNewEpisodeAt,
-              title.updated_at AS updatedAt,
-              title.total_episode_count AS totalEpisodeCount,
-              title.current_max_episode_no AS currentMaxEpisodeNo,
-              COALESCE(tag_summary.tags, ARRAY[]::text[]) AS tags,
-              COALESCE(episode_summary.episodes, '[]'::json) AS episodes
+            SELECT title.id,
+                   title.name,
+                   title.cover_url                                AS poster,
+                   title.first_ingested_at                        AS firstIngestedAt,
+                   title.last_new_episode_at                      AS lastNewEpisodeAt,
+                   title.updated_at                               AS updatedAt,
+                   title.total_episode_count                      AS totalEpisodeCount,
+                   title.current_max_episode_no                   AS currentMaxEpisodeNo,
+                   COALESCE(tag_summary.tags, ARRAY[]::text[])    AS tags,
+                   COALESCE(episode_summary.episodes, '[]'::json) AS episodes
             FROM title
-            LEFT JOIN LATERAL (
-              SELECT
-                COALESCE(
-                  JSON_AGG(
-                    JSON_BUILD_OBJECT(
-                      'episode', episode.episode_no,
-                      'firstIngestedAt', episode.first_ingested_at,
-                      'updatedAt', episode.updated_at,
-                      'videoUrl', episode.episode_url
-                    )
-                    ORDER BY episode.episode_no
-                  ) FILTER (WHERE episode.id IS NOT NULL),
-                  '[]'::json
-                ) AS episodes
-              FROM episode
-              WHERE episode.title_id = title.id
-            ) AS episode_summary ON TRUE
-            LEFT JOIN LATERAL (
-              SELECT
-                COALESCE(
-                  ARRAY_AGG(tag.tag_name ORDER BY tag.sort_no, tag.tag_name),
-                  ARRAY[]::text[]
-                ) AS tags
-              FROM title_tag
-              JOIN tag ON tag.id = title_tag.tag_id
-              WHERE title_tag.title_id = title.id
-            ) AS tag_summary ON TRUE
+                     LEFT JOIN LATERAL (
+                SELECT COALESCE(
+                               JSON_AGG(
+                                       JSON_BUILD_OBJECT(
+                                               'episode', episode.episode_no,
+                                               'firstIngestedAt', episode.first_ingested_at,
+                                               'updatedAt', episode.updated_at,
+                                               'videoUrl', episode.episode_url
+                                       ) ORDER BY episode.episode_no
+                               ) FILTER(WHERE episode.id IS NOT NULL),
+                               '[]' ::json
+                       ) AS episodes
+                FROM episode
+                WHERE episode.title_id = title.id
+                    ) AS episode_summary ON TRUE
+                     LEFT JOIN LATERAL (
+                SELECT COALESCE(
+                               ARRAY_AGG(tag.tag_name ORDER BY tag.sort_no, tag.tag_name),
+                               ARRAY[] ::text[]
+                       ) AS tags
+                FROM title_tag
+                         JOIN tag ON tag.id = title_tag.tag_id
+                WHERE title_tag.title_id = title.id
+                    ) AS tag_summary ON TRUE
             WHERE title.name = %s
             """,
             (title_name,),
@@ -587,10 +664,6 @@ def api_series_detail(title_name):
     if not payload:
         return build_json_response(404, message="漫剧不存在")
     return build_json_response(200, data=payload)
-
-
-def is_non_empty_text(value) -> bool:
-    return isinstance(value, str) and bool(value.strip())
 
 
 def serialize_episode_record(row):
@@ -771,78 +844,27 @@ def extract_episode_records_from_url_list(video_urls: list[str]):
     return list(deduplicated_episode_records.values())
 
 
-@flask_app.route("/api/tags", methods=["GET"])
-def api_tags_get():
-    with open_db_connection() as db_connection, db_connection.cursor() as db_cursor:
-        db_cursor.execute("SELECT tag_name FROM tag ORDER BY sort_no ASC, tag_name ASC")
-        tag_rows = db_cursor.fetchall()
-    return build_json_response(200, data=[tag_row["tag_name"] for tag_row in tag_rows])
-
-
 @flask_app.route("/api/titles", methods=["GET"])
 def api_titles_get():
     """返回管理面板和详情路由需要的轻量标题列表，不带剧集聚合结果"""
     with open_db_connection() as db_connection, db_connection.cursor() as db_cursor:
         db_cursor.execute(
             """
-            SELECT
-              title.name,
-              title.cover_url AS poster,
-              COALESCE(
-                ARRAY_AGG(tag.tag_name ORDER BY tag.sort_no, tag.tag_name) FILTER (WHERE tag.tag_name IS NOT NULL),
-                ARRAY[]::text[]
-              ) AS tags
+            SELECT title.name,
+                   title.cover_url AS poster,
+                   COALESCE(
+                           ARRAY_AGG(tag.tag_name ORDER BY tag.sort_no, tag.tag_name) FILTER(WHERE tag.tag_name IS NOT NULL),
+                           ARRAY[] ::text[]
+                   )               AS tags
             FROM title
-            LEFT JOIN title_tag ON title_tag.title_id = title.id
-            LEFT JOIN tag ON tag.id = title_tag.tag_id
+                     LEFT JOIN title_tag ON title_tag.title_id = title.id
+                     LEFT JOIN tag ON tag.id = title_tag.tag_id
             GROUP BY title.id, title.name, title.cover_url
             ORDER BY title.name ASC
             """
         )
         title_rows = db_cursor.fetchall()
     return build_json_response(200, data=title_rows)
-
-
-@flask_app.route("/api/tags", methods=["POST"])
-def api_tags_post():
-    """创建标签"""
-    request_body = request.get_json(silent=True) or {}
-    if not is_non_empty_text(request_body.get("tagName")):
-        return build_json_response(400, message="tagName不能为空")
-    created_tag_name = request_body["tagName"].strip()
-    try:
-        with open_db_connection_in_transaction() as db_connection, db_connection.cursor() as db_cursor:
-            db_cursor.execute("INSERT INTO tag(tag_name) VALUES (%s)", (created_tag_name,))
-    except UniqueViolation:
-        return build_json_response(409, message=f"<{created_tag_name}>标签已存在")
-    return build_json_response(201, message=f"<{created_tag_name}>标签已创建，请为剧集分配此标签", data=created_tag_name)
-
-
-@flask_app.route("/api/tags/<path:tag_name>", methods=["PATCH"])
-def api_tags_patch(tag_name):
-    """重命名标签"""
-    body = request.get_json(silent=True) or {}
-    if not is_non_empty_text(body.get("newTagName")):
-        return build_json_response(400, message="newTagName 不能为空")
-    new_tag_name = body["newTagName"].strip()
-    try:
-        with open_db_connection_in_transaction() as conn, conn.cursor() as cur:
-            cur.execute("UPDATE tag SET tag_name = %s WHERE tag_name = %s", (new_tag_name, tag_name))
-            if cur.rowcount == 0:
-                return build_json_response(404, message="标签不存在")
-    except UniqueViolation:
-        return build_json_response(409, message="标签已存在")
-    return build_json_response(200, message="标签改名成功")
-
-
-@flask_app.route("/api/tags/<path:tag_name>", methods=["DELETE"])
-def api_tags_delete(tag_name):
-    """删除标签"""
-    with open_db_connection_in_transaction() as conn, conn.cursor() as cur:
-        cur.execute("DELETE FROM tag WHERE tag_name = %s", (tag_name,))
-        if cur.rowcount == 0:
-            return build_json_response(404, message="标签不存在")
-    return build_json_response(200, message="标签已删除")
 
 
 @flask_app.route("/api/titles", methods=["POST"])
@@ -852,15 +874,15 @@ def api_titles_post():
     会同时写入名称 封面和标签关联
     """
     request_json = request.get_json(silent=True) or {}
-    if not is_non_empty_text(request_json.get("name")):
+    if not is_valid_text(request_json.get("name")):
         return build_json_response(400, message="name不能为空")
-    if not is_non_empty_text(request_json.get("poster")):
+    if not is_valid_text(request_json.get("poster")):
         return build_json_response(400, message="poster不能为空")
 
     title_name = request_json["name"].strip()
     # 列表推导会先过滤空白标签
     # 再把保留下来的标签统一裁剪首尾空格
-    selected_tags = [tag_name.strip() for tag_name in request_json.get("tags", []) if is_non_empty_text(tag_name)]
+    selected_tags = [tag_name.strip() for tag_name in request_json.get("tags", []) if is_valid_text(tag_name)]
 
     try:
         with open_db_connection_in_transaction() as db_connection, db_connection.cursor() as db_cursor:
@@ -884,11 +906,11 @@ def api_titles_post():
 def api_titles_patch(title_name):
     """修改漫剧名称 封面和标签"""
     body = request.get_json(silent=True) or {}
-    if not is_non_empty_text(body.get("newName")) or not is_non_empty_text(body.get("poster")) or not isinstance(body.get("tags"), list):
+    if not is_valid_text(body.get("newName")) or not is_valid_text(body.get("poster")) or not isinstance(body.get("tags"), list):
         return build_json_response(400, message="newName、poster、tags 参数不完整")
 
     new_name = body["newName"].strip()
-    tags = [tag.strip() for tag in body["tags"] if is_non_empty_text(tag)]
+    tags = [tag.strip() for tag in body["tags"] if is_valid_text(tag)]
     if not tags:
         return build_json_response(400, message="tags 至少需要一个标签")
 
@@ -932,7 +954,7 @@ def api_episodes_batch_directory():
     directory_url = str(body.get("directoryUrl") or "").strip()
     # 列表推导会先过滤空标签
     # 再把保留下来的标签名裁掉首尾空白
-    tags = [tag.strip() for tag in body.get("tags", []) if is_non_empty_text(tag)]
+    tags = [tag.strip() for tag in body.get("tags", []) if is_valid_text(tag)]
 
     if not name or not poster or not directory_url:
         return build_json_response(400, message="name、poster、directoryUrl 不能为空")
