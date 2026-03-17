@@ -1,3 +1,4 @@
+import math
 import os
 import re
 import time
@@ -311,6 +312,43 @@ def normalize_positive_int(value, default, max_value=None):
     return parsed
 
 
+def build_series_order_by_sql(sort: str | None) -> str:
+    """把排序参数映射成SQL的ORDER BY片段"""
+    sort_map = {
+        "updated_desc": "title.updated_at DESC, title.name ASC",
+        "updated_asc": "title.updated_at ASC, title.name ASC",
+        "ingested_asc": "title.first_ingested_at ASC, title.name ASC",
+        "ingested_desc": "title.first_ingested_at DESC, title.name ASC",
+        "name_asc": "title.name ASC",
+        "name_desc": "title.name DESC",
+    }
+    return sort_map.get(sort or "", sort_map["updated_desc"])
+
+
+def serialize_series_record(row):
+    """把聚合后的漫剧记录转换成前端可直接渲染的结构"""
+    episodes = row.get("episodes") or []
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "poster": row["poster"],
+        "firstIngestedAt": convert_to_iso_datetime(row["firstIngestedAt"]),
+        "updatedAt": convert_to_iso_datetime(row["updatedAt"]),
+        "lastNewEpisodeAt": convert_to_iso_datetime(row["lastNewEpisodeAt"]),
+        "tags": row.get("tags") or [],
+        # 列表推导会把聚合结果里的每一集重新整理成统一字段
+        "episodes": [
+            {
+                "episode": int(episode["episode"]),
+                "firstIngestedAt": convert_to_iso_datetime(episode["firstIngestedAt"]),
+                "updatedAt": convert_to_iso_datetime(episode["updatedAt"]),
+                "videoUrl": episode["videoUrl"],
+            }
+            for episode in episodes
+        ],
+    }
+
+
 def query_series_page_data(tag=None, name=None, search=None, sort=None, page=1, page_size=25):
     """
     把前端传来的筛选条件转换成SQL:
@@ -324,76 +362,54 @@ def query_series_page_data(tag=None, name=None, search=None, sort=None, page=1, 
     # 如果前端传了标签，就把标签值加入参数列表，后面会传给%s占位符
     if tag:
         values.append(tag)
-        # 标签筛选只要求当前漫剧至少命中过一次目标标签
-        filters.append(f"""EXISTS ( SELECT 1 FROM title_tag JOIN tag ON tag.id = title_tag.tag_id WHERE title_tag.title_id = t.id AND tag.tag_name = %s )""")
+        # 筛选出拥有指定标签的title
+        filters.append("""EXISTS (SELECT 1 FROM title_tag JOIN tag ON tag.id = title_tag.tag_id WHERE title_tag.title_id = title.id AND tag.tag_name = %s)""")
     if name:
         values.append(name)
-        filters.append("t.name = %s")
+        filters.append("title.name = %s")
     if search:
-        # 搜索关键字会先转成小写
-        # 再和 LOWER(name) 做模糊匹配
+        # 搜索关键字会先转成小写，再和LOWER(name)做模糊匹配
         values.append(f"%{search.strip().lower()}%")
-        filters.append("LOWER(t.name) LIKE %s")
+        filters.append("LOWER(title.name) LIKE %s")
 
-    # 没有筛选条件时直接复用同一套 SQL 模板
     where_clause = f"WHERE {" AND ".join(filters)}" if filters else ""
     order_by_clause = build_series_order_by_sql(sort)
-    order_by_selected_titles = order_by_clause.replace("t.", "st.")
+    order_by_selected_titles = order_by_clause.replace("title.", "selected_titles.")
 
-    with open_db_connection() as conn, conn.cursor() as cur:
-        cur.execute(
-            f"""
-            SELECT COUNT(*)::int AS total
-            FROM title t
-            {where_clause}
-            """,
-            values,
-        )
-        total = cur.fetchone()["total"] or 0
-        total_pages = max(1, (total + page_size - 1) // page_size)
-        safe_page = min(page, total_pages)
+    with open_db_connection() as db_connection, db_connection.cursor() as db_cursor:
+        db_cursor.execute(f"""SELECT COUNT(*)::int AS total FROM title {where_clause}""", values, )
+        total = db_cursor.fetchone()["total"] or 0
+        total_pages = max(1, math.ceil(total / page_size))
+        safe_page = max(1, min(page, total_pages))
         offset = (safe_page - 1) * page_size
 
-        # 先选出当前页标题再做聚合
-        # 这样分页针对的是漫剧列表而不是聚合后的宽结果
-        cur.execute(
+        db_cursor.execute(
             f"""
-            WITH selected_titles AS (
-              SELECT t.id, t.name, t.cover_url, t.first_ingested_at, t.updated_at
-              FROM title t
-              {where_clause}
-              ORDER BY {order_by_clause}
-              LIMIT %s OFFSET %s
-            )
+            WITH selected_titles AS (SELECT title.id, title.name, title.cover_url, title.first_ingested_at, title.updated_at FROM title {where_clause} ORDER BY {order_by_clause} LIMIT %s OFFSET %s)
             SELECT
-              st.id,
-              st.name,
-              st.cover_url AS poster,
-              st.first_ingested_at AS "firstIngestedAt",
-              st.updated_at AS "updatedAt",
-              COALESCE(MAX(e.first_ingested_at), st.first_ingested_at) AS "lastNewEpisodeAt",
-              COALESCE(ARRAY_AGG(DISTINCT g.tag_name) FILTER (WHERE g.tag_name IS NOT NULL), ARRAY[]::text[]) AS tags,
-              COALESCE(
-                JSON_AGG(
-                  JSON_BUILD_OBJECT(
-                    'episode', e.episode_no,
-                    'firstIngestedAt', e.first_ingested_at,
-                    'updatedAt', e.updated_at,
-                    'videoUrl', e.episode_url
-                  ) ORDER BY e.episode_no
-                ) FILTER (WHERE e.id IS NOT NULL),
-                '[]'::json
-              ) AS episodes
-            FROM selected_titles st
-            LEFT JOIN episode e ON e.title_id = st.id
-            LEFT JOIN title_tag tt ON tt.title_id = st.id
-            LEFT JOIN tag g ON g.id = tt.tag_id
-            GROUP BY st.id, st.name, st.cover_url, st.first_ingested_at, st.updated_at
+              selected_titles.id,
+              selected_titles.name,
+              selected_titles.cover_url AS poster,
+              selected_titles.first_ingested_at AS firstIngestedAt,
+              selected_titles.updated_at AS updatedAt,
+              COALESCE(MAX(episode.first_ingested_at), selected_titles.first_ingested_at) AS lastNewEpisodeAt,
+              COALESCE(ARRAY_AGG(DISTINCT tag.tag_name) FILTER (WHERE tag.tag_name IS NOT NULL), ARRAY[]::text[]) AS tags,
+              COALESCE(JSON_AGG(JSON_BUILD_OBJECT('episode', episode.episode_no, 'firstIngestedAt', episode.first_ingested_at, 'updatedAt', episode.updated_at, 'videoUrl', episode.episode_url) ORDER BY episode.episode_no) FILTER (WHERE episode.id IS NOT NULL), '[]'::json) AS episodes
+            FROM selected_titles
+            LEFT JOIN episode ON episode.title_id = selected_titles.id
+            LEFT JOIN title_tag ON title_tag.title_id = selected_titles.id
+            LEFT JOIN tag ON tag.id = title_tag.tag_id
+            GROUP BY
+              selected_titles.id,
+              selected_titles.name,
+              selected_titles.cover_url,
+              selected_titles.first_ingested_at,
+              selected_titles.updated_at
             ORDER BY {order_by_selected_titles}
             """,
             [*values, page_size, offset],
         )
-        rows = cur.fetchall()
+        rows = db_cursor.fetchall()
 
     # 列表推导会把数据库行逐条转换成前端直接可消费的结构
     data = [serialize_series_record(row) for row in rows]
@@ -436,30 +452,6 @@ def serialize_episode_record(row):
     }
 
 
-def serialize_series_record(row):
-    """把聚合后的漫剧记录转换成前端可直接渲染的结构"""
-    episodes = row.get("episodes") or []
-    return {
-        "id": row["id"],
-        "name": row["name"],
-        "poster": row["poster"],
-        "firstIngestedAt": convert_to_iso_datetime(row["firstIngestedAt"]),
-        "updatedAt": convert_to_iso_datetime(row["updatedAt"]),
-        "lastNewEpisodeAt": convert_to_iso_datetime(row["lastNewEpisodeAt"]),
-        "tags": row.get("tags") or [],
-        # 列表推导会把聚合结果里的每一集重新整理成统一字段
-        "episodes": [
-            {
-                "episode": int(ep["episode"]),
-                "firstIngestedAt": convert_to_iso_datetime(ep["firstIngestedAt"]),
-                "updatedAt": convert_to_iso_datetime(ep["updatedAt"]),
-                "videoUrl": ep["videoUrl"],
-            }
-            for ep in episodes
-        ],
-    }
-
-
 def replace_title_tags(conn: psycopg.Connection, title_id: int, tags: list[str]):
     """用请求里的整组标签覆盖当前漫剧标签
 
@@ -479,19 +471,6 @@ def replace_title_tags(conn: psycopg.Connection, title_id: int, tags: list[str])
             """,
             (title_id, tags),
         )
-
-
-def build_series_order_by_sql(sort: str | None) -> str:
-    """把排序参数映射成 SQL 的 ORDER BY 片段"""
-    sort_map = {
-        "updated_desc": "t.updated_at DESC, t.name ASC",
-        "updated_asc": "t.updated_at ASC, t.name ASC",
-        "ingested_asc": "t.first_ingested_at ASC, t.name ASC",
-        "ingested_desc": "t.first_ingested_at DESC, t.name ASC",
-        "name_asc": "t.name ASC",
-        "name_desc": "t.name DESC",
-    }
-    return sort_map.get(sort or "", sort_map["updated_desc"])
 
 
 def parse_chinese_numeral(raw: str | None):
