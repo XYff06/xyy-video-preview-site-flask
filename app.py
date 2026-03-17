@@ -107,68 +107,55 @@ def api_tags_get():
 @flask_app.route("/api/tags", methods=["POST"])
 def api_tags_post():
     """创建标签"""
-    # 尝试把请求体解析成JSON，如果解析失败、请求体为空或者不是合法JSON，return {}
+    # 尝试把请求体解析成JSON，如果解析失败、请求体为空或者不是合法JSON，就用空字典兜底
     request_body = request.get_json(silent=True) or {}
-
     # 校验tagName是否有效
     if not is_valid_text(request_body.get("tagName")):
         return build_json_response(400, message="无效tagName")
-
     created_tag_name = request_body["tagName"].strip()
     try:
-        # 打开带事务的数据库连接，这段插入要么成功提交，要么失败回滚
+        # 开启事务执行创建，创建成功会提交，失败会回滚
         with open_db_connection_in_transaction() as db_connection, db_connection.cursor() as db_cursor:
-            # 向tag表插入一条新标签记录
             db_cursor.execute("INSERT INTO tag(tag_name) VALUES (%s)", (created_tag_name,))
     except UniqueViolation:
         return build_json_response(409, message=f"<{created_tag_name}>标签已存在")
-
-    # 创建成功后返回201
-    # data里顺手回传创建成功的标签名，前端可以直接复用
+    # 标签创建成功，返回201
     return build_json_response(201, message=f"<{created_tag_name}>标签已创建")
 
 
 @flask_app.route("/api/tags/<path:tag_name>", methods=["PATCH"])
 def api_tags_patch(tag_name):
     """重命名标签"""
+    # 尝试把请求体解析成JSON，如果解析失败、请求体为空或者不是合法JSON，就用空字典兜底
     request_body = request.get_json(silent=True) or {}
     # 校验newTagName是否有效
     if not is_valid_text(request_body.get("newTagName")):
         return build_json_response(400, message="无效newTagName")
-    # 取出去空白后的新标签名
     new_tag_name = request_body["newTagName"].strip()
     try:
-        # 打开事务
-        with open_db_connection_in_transaction() as conn, conn.cursor() as cur:
-            # 把原标签名改成新标签名
-            # WHERE tag_name = %s会只更新目标标签
-            cur.execute("UPDATE tag SET tag_name = %s WHERE tag_name = %s", (new_tag_name, tag_name))
-
+        # 开启事务执行改名，改名成功会提交，失败会回滚
+        with open_db_connection_in_transaction() as db_connection, db_connection.cursor() as db_cursor:
+            db_cursor.execute("UPDATE tag SET tag_name = %s WHERE tag_name = %s", (new_tag_name, tag_name))
             # 如果影响行数是0，说明原标签不存在
-            if cur.rowcount == 0:
-                return build_json_response(404, message="标签不存在")
+            if db_cursor.rowcount == 0:
+                return build_json_response(404, message=f"<{tag_name}>标签不存在")
     except UniqueViolation:
-        # 如果新标签名已经被别的标签占用，就会触发唯一约束冲突
-        return build_json_response(409, message="标签已存在")
-
-    # 改名成功
-    return build_json_response(200, message="标签改名成功")
+        return build_json_response(409, message=f"<{new_tag_name}>标签已存在")
+    # 标签改名成功，返回200
+    return build_json_response(200, message=f"标签<{tag_name}>改名成功，新标签名: <{new_tag_name}>")
 
 
 @flask_app.route("/api/tags/<path:tag_name>", methods=["DELETE"])
 def api_tags_delete(tag_name):
     """删除标签"""
-    # 打开事务
-    with open_db_connection_in_transaction() as conn, conn.cursor() as cur:
-        # 按标签名删除对应记录
-        cur.execute("DELETE FROM tag WHERE tag_name = %s", (tag_name,))
-
-        # 如果没有删到任何行，说明标签不存在
-        if cur.rowcount == 0:
-            return build_json_response(404, message="标签不存在")
-
-    # 删除成功
-    return build_json_response(200, message="标签已删除")
+    # 开启事务执行删除，删除成功会提交，失败会回滚
+    with open_db_connection_in_transaction() as db_connection, db_connection.cursor() as db_cursor:
+        db_cursor.execute("DELETE FROM tag WHERE tag_name = %s", (tag_name,))
+        # 如果没有删到记录，说明这个标签不存在
+        if db_cursor.rowcount == 0:
+            return build_json_response(404, message=f"<{tag_name}>标签不存在")
+    # 标签删除成功，返回200
+    return build_json_response(200, message=f"<{tag_name}>标签已删除")
 
 
 # def query_flat_episode_ingest_records():
