@@ -168,134 +168,30 @@ def api_tags_delete(tag_name):
     return build_json_response(200, message=f"<{tag_name}>标签已删除")
 
 
-@flask_app.route("/api/titles", methods=["GET"])
-def api_titles_get():
-    """返回管理面板和详情路由需要的轻量标题列表，不带剧集聚合结果"""
-    with open_db_connection() as db_connection, db_connection.cursor() as db_cursor:
+def replace_title_tags(db_connection: psycopg.Connection, title_id: int, tags: list[str]):
+    """用请求里的整组标签覆盖当前漫剧标签
+
+    先清空旧关联再回填新关联
+    这样可以保证数据库状态和本次请求完全一致
+    """
+    # TODO: 如果后面出现这些情况，就值得改:
+    #  批量导入很多漫剧
+    #  标签更新很频繁
+    #  你想减少无意义写入
+    #  你后面给title_tag加了审计字段/触发器，删了再插会很脏
+    with db_connection.cursor() as db_cursor:
+        db_cursor.execute("DELETE FROM title_tag WHERE title_id = %s", (title_id,))
+        if not tags:
+            return
         db_cursor.execute(
             """
-            SELECT title.name,
-                   title.cover_url AS poster,
-                   COALESCE(
-                           ARRAY_AGG(tag.tag_name ORDER BY tag.sort_no, tag.tag_name) FILTER(WHERE tag.tag_name IS NOT NULL),
-                           ARRAY[] ::text[]
-                   )               AS tags
-            FROM title
-                     LEFT JOIN title_tag ON title_tag.title_id = title.id
-                     LEFT JOIN tag ON tag.id = title_tag.tag_id
-            GROUP BY title.id, title.name, title.cover_url
-            ORDER BY title.name ASC
-            """
+            INSERT INTO title_tag(title_id, tag_id)
+            SELECT %s, tag.id
+            FROM tag
+            WHERE tag.tag_name = ANY (%s) ON CONFLICT DO NOTHING
+            """,
+            (title_id, tags),
         )
-        title_rows = db_cursor.fetchall()
-    return build_json_response(200, data=title_rows)
-
-
-@flask_app.route("/api/titles", methods=["POST"])
-def api_titles_post():
-    """创建漫剧基础信息
-
-    会同时写入名称 封面和标签关联
-    """
-    request_json = request.get_json(silent=True) or {}
-    if not is_valid_text(request_json.get("name")):
-        return build_json_response(400, message="name不能为空")
-    if not is_valid_text(request_json.get("poster")):
-        return build_json_response(400, message="poster不能为空")
-
-    title_name = request_json["name"].strip()
-    # 列表推导会先过滤空白标签
-    # 再把保留下来的标签统一裁剪首尾空格
-    selected_tags = [tag_name.strip() for tag_name in request_json.get("tags", []) if is_valid_text(tag_name)]
-
-    try:
-        with open_db_connection_in_transaction() as db_connection, db_connection.cursor() as db_cursor:
-            db_cursor.execute("INSERT INTO title(name, cover_url) VALUES (%s, %s) RETURNING id", (title_name, "__pending__"))
-            created_title_id = db_cursor.fetchone()["id"]
-            poster_url = resolve_resource_to_url(
-                request_json["poster"],
-                str(created_title_id),
-                local_path_kind="file",
-            )
-            db_cursor.execute("UPDATE title SET cover_url = %s WHERE id = %s", (poster_url, created_title_id))
-            replace_title_tags(db_connection, created_title_id, selected_tags)
-    except ValueError as resolve_error:
-        return build_json_response(400, message=str(resolve_error))
-    except UniqueViolation:
-        return build_json_response(409, message=f"<{title_name}>漫剧名称已存在")
-    return build_json_response(201, message=f"<{title_name}>漫剧已创建")
-
-
-@flask_app.route("/api/titles/<path:title_name>", methods=["PATCH"])
-def api_titles_patch(title_name):
-    """修改漫剧名称 封面和标签"""
-    body = request.get_json(silent=True) or {}
-    if not is_valid_text(body.get("newName")) or not is_valid_text(body.get("poster")) or not isinstance(body.get("tags"), list):
-        return build_json_response(400, message="newName、poster、tags 参数不完整")
-
-    new_name = body["newName"].strip()
-    tags = [tag.strip() for tag in body["tags"] if is_valid_text(tag)]
-    if not tags:
-        return build_json_response(400, message="tags 至少需要一个标签")
-
-    try:
-        with open_db_connection_in_transaction() as conn, conn.cursor() as cur:
-            cur.execute("SELECT id FROM title WHERE name = %s", (title_name,))
-            row = cur.fetchone()
-            if not row:
-                return build_json_response(404, message="漫剧不存在")
-            title_id = row["id"]
-            poster = resolve_resource_to_url(body["poster"], str(title_id), local_path_kind="file")
-            cur.execute("UPDATE title SET name = %s, cover_url = %s WHERE id = %s", (new_name, poster, title_id))
-            replace_title_tags(conn, title_id, tags)
-    except ValueError as exc:
-        return build_json_response(400, message=str(exc))
-    except UniqueViolation:
-        return build_json_response(409, message="目标名称已存在")
-    return build_json_response(200, message="漫剧信息修改成功")
-
-
-@flask_app.route("/api/titles/<path:title_name>", methods=["DELETE"])
-def api_titles_delete(title_name):
-    """删除漫剧"""
-    with open_db_connection_in_transaction() as conn, conn.cursor() as cur:
-        cur.execute("DELETE FROM title WHERE name = %s", (title_name,))
-        if cur.rowcount == 0:
-            return build_json_response(404, message="漫剧不存在")
-    return build_json_response(200, message="漫剧删除成功")
-
-
-def get_required_oss_config():
-    """
-    读取必填的OSS相关环境变量
-
-    Returns:
-        tuple[str, str, str, str, str]:
-            按顺序返回access_key、secret_key、endpoint、region、bucket_name
-
-    Raises:
-        Exception:
-            当任意必填OSS环境变量缺失时抛出异常
-    """
-    access_key = get_normalized_environment_variable("OSS_ACCESS_KEY")
-    secret_key = get_normalized_environment_variable("OSS_SECRET_KEY")
-    endpoint = get_normalized_environment_variable("OSS_ENDPOINT")
-    region = get_normalized_environment_variable("OSS_REGION")
-    bucket_name = get_normalized_environment_variable("OSS_BUCKET_NAME")
-    missing = [
-        name
-        for name, current in (
-            ("OSS_ACCESS_KEY", access_key),
-            ("OSS_SECRET_KEY", secret_key),
-            ("OSS_ENDPOINT", endpoint),
-            ("OSS_REGION", region),
-            ("OSS_BUCKET_NAME", bucket_name),
-        )
-        if not current
-    ]
-    if missing:
-        raise ValueError(f"缺少OSS配置: {'、'.join(missing)}")
-    return access_key, secret_key, endpoint, region, bucket_name
 
 
 def resolve_resource_to_url(value: str, name: str, local_path_kind: str = "any"):
@@ -374,6 +270,139 @@ def resolve_resource_to_url(value: str, name: str, local_path_kind: str = "any")
         return url_list
 
     raise Exception("输入路径既不是文件也不是目录")
+
+
+@flask_app.route("/api/titles", methods=["GET"])
+def api_titles_get():
+    """返回每部漫剧的基础信息: name、cover_url、tags"""
+    # TODO: 暂未明确做什么事情的接口
+    with open_db_connection() as db_connection, db_connection.cursor() as db_cursor:
+        db_cursor.execute(
+            """
+            SELECT title.name,
+                   title.cover_url,
+                   COALESCE(ARRAY_AGG(tag.tag_name ORDER BY tag.tag_name) FILTER(WHERE tag.tag_name IS NOT NULL), ARRAY[] ::text[]) AS tags
+            FROM title
+                     LEFT JOIN title_tag ON title_tag.title_id = title.id
+                     LEFT JOIN tag ON tag.id = title_tag.tag_id
+            GROUP BY title.id, title.name, title.cover_url
+            ORDER BY title.name ASC
+            """
+        )
+        title_rows = db_cursor.fetchall()
+    return build_json_response(200, data=title_rows)
+
+
+@flask_app.route("/api/titles", methods=["POST"])
+def api_titles_post():
+    # 尝试把请求体解析成JSON，如果解析失败、请求体为空或者不是合法JSON，就用空字典兜底
+    request_body = request.get_json(silent=True) or {}
+    # 校验name是否有效
+    if not is_valid_text(request_body.get("name")):
+        return build_json_response(400, message="无效name")
+    title_name = request_body["name"].strip()
+    raw_poster = str(request_body.get("poster") or "").strip()
+    selected_tags = [tag_name.strip() for tag_name in request_body.get("tags", []) if is_valid_text(tag_name)]
+    selected_tags = list(dict.fromkeys(selected_tags))
+    # 先插入name和selected_tags，有raw_poster再更新
+    try:
+        # 开启事务执行创建，创建成功会提交，失败会回滚
+        with open_db_connection_in_transaction() as db_connection, db_connection.cursor() as db_cursor:
+            # 创建一条只有name、cover_url=None的漫剧记录
+            db_cursor.execute("INSERT INTO title(name, cover_url) VALUES (%s, %s) RETURNING id", (title_name, None), )
+            created_title_id = db_cursor.fetchone()["id"]  # 这条记录的id
+            # title_tag
+            if selected_tags:
+                # 去tag表里查，selected_tags这些标签名里哪些是真实存在于数据库中的
+                db_cursor.execute("SELECT tag_name FROM tag WHERE tag_name = ANY(%s)", (selected_tags,), )
+                existing_tag_names = {row["tag_name"] for row in db_cursor.fetchall()}
+                missing_tag_names = [tag_name for tag_name in selected_tags if tag_name not in existing_tag_names]
+                if missing_tag_names:
+                    raise Exception(f"以下标签不存在: {'、'.join(missing_tag_names)}")
+            replace_title_tags(db_connection, created_title_id, selected_tags)
+            if raw_poster:
+                # TODO: 待检查
+                poster_url = resolve_resource_to_url(raw_poster, str(created_title_id), local_path_kind="file", )
+                db_cursor.execute("UPDATE title SET cover_url = %s WHERE id = %s", (poster_url, created_title_id), )
+        invalidate_series_page_cache()
+    except UniqueViolation:
+        return build_json_response(409, message=f"<{title_name}>漫剧名称已存在")
+    except Exception as e:
+        return build_json_response(400, message=str(e))
+    # 漫剧创建成功，返回201
+    return build_json_response(201, message=f"<{title_name}>漫剧已创建")
+
+
+@flask_app.route("/api/titles/<path:title_name>", methods=["PATCH"])
+def api_titles_patch(title_name):
+    """修改漫剧名称 封面和标签"""
+    body = request.get_json(silent=True) or {}
+    if not is_valid_text(body.get("newName")) or not is_valid_text(body.get("poster")) or not isinstance(body.get("tags"), list):
+        return build_json_response(400, message="newName、poster、tags 参数不完整")
+
+    new_name = body["newName"].strip()
+    tags = [tag.strip() for tag in body["tags"] if is_valid_text(tag)]
+    if not tags:
+        return build_json_response(400, message="tags 至少需要一个标签")
+
+    try:
+        with open_db_connection_in_transaction() as conn, conn.cursor() as cur:
+            cur.execute("SELECT id FROM title WHERE name = %s", (title_name,))
+            row = cur.fetchone()
+            if not row:
+                return build_json_response(404, message="漫剧不存在")
+            title_id = row["id"]
+            poster = resolve_resource_to_url(body["poster"], str(title_id), local_path_kind="file")
+            cur.execute("UPDATE title SET name = %s, cover_url = %s WHERE id = %s", (new_name, poster, title_id))
+            replace_title_tags(conn, title_id, tags)
+    except ValueError as exc:
+        return build_json_response(400, message=str(exc))
+    except UniqueViolation:
+        return build_json_response(409, message="目标名称已存在")
+    return build_json_response(200, message="漫剧信息修改成功")
+
+
+@flask_app.route("/api/titles/<path:title_name>", methods=["DELETE"])
+def api_titles_delete(title_name):
+    """删除漫剧"""
+    with open_db_connection_in_transaction() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM title WHERE name = %s", (title_name,))
+        if cur.rowcount == 0:
+            return build_json_response(404, message="漫剧不存在")
+    return build_json_response(200, message="漫剧删除成功")
+
+
+def get_required_oss_config():
+    """
+    读取必填的OSS相关环境变量
+
+    Returns:
+        tuple[str, str, str, str, str]:
+            按顺序返回access_key、secret_key、endpoint、region、bucket_name
+
+    Raises:
+        Exception:
+            当任意必填OSS环境变量缺失时抛出异常
+    """
+    access_key = get_normalized_environment_variable("OSS_ACCESS_KEY")
+    secret_key = get_normalized_environment_variable("OSS_SECRET_KEY")
+    endpoint = get_normalized_environment_variable("OSS_ENDPOINT")
+    region = get_normalized_environment_variable("OSS_REGION")
+    bucket_name = get_normalized_environment_variable("OSS_BUCKET_NAME")
+    missing = [
+        name
+        for name, current in (
+            ("OSS_ACCESS_KEY", access_key),
+            ("OSS_SECRET_KEY", secret_key),
+            ("OSS_ENDPOINT", endpoint),
+            ("OSS_REGION", region),
+            ("OSS_BUCKET_NAME", bucket_name),
+        )
+        if not current
+    ]
+    if missing:
+        raise ValueError(f"缺少OSS配置: {'、'.join(missing)}")
+    return access_key, secret_key, endpoint, region, bucket_name
 
 
 def append_millisecond_timestamp_to_filename(path_object: Path) -> str:
@@ -600,11 +629,11 @@ def query_series_page_data(tag=None, name=None, search=None, sort=None, page=1, 
               COALESCE(tag_summary.tags, ARRAY[]::text[]) AS tags
             FROM paged_titles
             LEFT JOIN LATERAL (
-              SELECT
-                COALESCE(
-                  ARRAY_AGG(tag.tag_name ORDER BY tag.sort_no, tag.tag_name),
-                  ARRAY[]::text[]
-                ) AS tags
+                SELECT
+                  COALESCE(
+                    ARRAY_AGG(tag.tag_name ORDER BY tag.tag_name),
+                    ARRAY[]::text[]
+                  ) AS tags
               FROM title_tag
               JOIN tag ON tag.id = title_tag.tag_id
               WHERE title_tag.title_id = paged_titles.id
@@ -663,7 +692,7 @@ def query_series_detail_data(title_name: str):
                     ) AS episode_summary ON TRUE
                      LEFT JOIN LATERAL (
                 SELECT COALESCE(
-                               ARRAY_AGG(tag.tag_name ORDER BY tag.sort_no, tag.tag_name),
+                               ARRAY_AGG(tag.tag_name ORDER BY tag.tag_name),
                                ARRAY[] ::text[]
                        ) AS tags
                 FROM title_tag
@@ -709,27 +738,6 @@ def serialize_episode_record(row):
         "updatedAt": convert_to_iso_datetime(row["updatedAt"]),
         "videoUrl": row["videoUrl"],
     }
-
-
-def replace_title_tags(conn: psycopg.Connection, title_id: int, tags: list[str]):
-    """用请求里的整组标签覆盖当前漫剧标签
-
-    先清空旧关联再回填新关联
-    这样可以保证数据库状态和本次请求完全一致
-    """
-    with conn.cursor() as cur:
-        cur.execute("DELETE FROM title_tag WHERE title_id = %s", (title_id,))
-        if not tags:
-            return
-        cur.execute(
-            """
-            INSERT INTO title_tag(title_id, tag_id)
-            SELECT %s, tag.id
-            FROM tag
-            WHERE tag.tag_name = ANY (%s) ON CONFLICT DO NOTHING
-            """,
-            (title_id, tags),
-        )
 
 
 def parse_chinese_numeral(raw: str | None):

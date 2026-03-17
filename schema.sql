@@ -5,7 +5,7 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE TABLE IF NOT EXISTS title (
   id BIGSERIAL PRIMARY KEY,
   name TEXT NOT NULL UNIQUE,
-  cover_url TEXT NOT NULL,
+  cover_url TEXT,
   is_completed BOOLEAN NOT NULL DEFAULT FALSE,
   first_ingested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   last_new_episode_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -13,7 +13,6 @@ CREATE TABLE IF NOT EXISTS title (
   total_episode_count INTEGER NOT NULL DEFAULT 0,
   current_max_episode_no INTEGER NOT NULL DEFAULT 0,
   CONSTRAINT check_title_name_not_blank CHECK (btrim(name) <> ''),
-  CONSTRAINT check_title_cover_url_not_blank CHECK (btrim(cover_url) <> ''),
   CONSTRAINT check_title_total_episode_count_non_negative CHECK (total_episode_count >= 0),
   CONSTRAINT check_title_current_max_episode_no_non_negative CHECK (current_max_episode_no >= 0)
 );
@@ -45,7 +44,6 @@ CREATE INDEX IF NOT EXISTS index_episode_title_id_first_ingested_at ON episode (
 CREATE TABLE IF NOT EXISTS tag (
   id BIGSERIAL PRIMARY KEY,
   tag_name TEXT NOT NULL UNIQUE,
-  sort_no INTEGER NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT check_tag_name_not_blank CHECK (btrim(tag_name) <> '')
 );

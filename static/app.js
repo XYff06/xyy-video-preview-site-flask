@@ -134,48 +134,22 @@ async function loadSeriesDetailByName(titleName, forceReload = false) {
  */
 async function reloadBaseDataAndRender() {
     const activeSeriesName = getCurrentRouteSeriesName();
-    try {
-        /**
-         * 并发拉取漫剧列表和标签列表
-         * 两份数据都返回后再一起写入状态
-         * 这样页面不会出现只更新一半的中间态
-         */
-        const [titleListResponse, tagListResponse] = await Promise.all([requestJsonApiOrThrow('/api/titles'), requestJsonApiOrThrow('/api/tags')]);
-        uiState.allTags = tagListResponse.data;
-        /**
-         * 这里会把后端返回的数据再做一次前端侧归一化
-         * tags 转成 Set 便于后面快速判断是否包含某个标签
-         * episodes 交给 normalizeEpisodeRecords 统一去重 排序和集号格式
-         */
-        uiState.allSeries = titleListResponse.data.map(normalizeSeriesSummaryRecord);
-        uiState.seriesDetailsByName = {};
 
-        /**
-         * 基础数据刷新成功后
-         * 关闭全局 loading 状态并清空旧错误
-         */
+    try {
+        const tagListResponse = await requestJsonApiOrThrow('/api/tags');
+        uiState.allTags = tagListResponse.data;
+        uiState.seriesDetailsByName = {};
         uiState.loading = false;
         uiState.error = null;
     } catch (error) {
-        /**
-         * 任意一个请求失败都会进入这里
-         * render 会根据 uiState.error 渲染失败提示
-         */
         uiState.loading = false;
         uiState.error = error.message;
         render();
         return;
     }
-    /**
-     * 无论成功还是失败都先走一次 render
-     * 这样当前界面会立即反映新的全局状态
-     */
+
     render();
 
-    /**
-     * 首页展示列表使用的是另一套带分页的查询结果
-     * 所以首页场景还需要继续补拉一次首页专用数据
-     */
     if (activeSeriesName) {
         try {
             await loadSeriesDetailByName(activeSeriesName, true);
@@ -187,6 +161,7 @@ async function reloadBaseDataAndRender() {
         render();
         return;
     }
+
     await loadHomeSeriesPageData();
 }
 
@@ -236,17 +211,7 @@ async function loadHomeSeriesPageData() {
  * @returns {string[]} 排序后的标签列表
  */
 function collectAvailableTags() {
-    /**
-     * 如果 uiState.allTags 已经有值就直接使用
-     * 这里复制一份数组返回 避免外部直接改写原始状态
-     */
-    if (uiState.allTags.length) return [...uiState.allTags];
-    /**
-     * 兜底场景会从全部漫剧里临时推导标签列表
-     * flatMap 会先把每个漫剧里的标签展开
-     * 外层 Set 再把重复标签去掉
-     */
-    return [...new Set(uiState.allSeries.flatMap((item) => [...item.tags]))].sort((a, b) => a.localeCompare(b, 'zh-CN'));
+    return [...uiState.allTags];
 }
 
 
@@ -519,7 +484,7 @@ function render() {
             };
         });
 
-            renderAdminPanel(document.getElementById('admin-content'));
+        renderAdminPanel(document.getElementById('admin-content'));
     }
 
     const pageContent = document.getElementById('page-content');
@@ -1233,7 +1198,10 @@ function renderAdminPanel(adminPanelContainer) {
             };
 
             try {
-                const responseJson = await requestJsonApiOrThrow('/api/episodes', {method: 'POST', body: JSON.stringify(payload)});
+                const responseJson = await requestJsonApiOrThrow('/api/episodes', {
+                    method: 'POST',
+                    body: JSON.stringify(payload)
+                });
                 if (getCurrentRouteSeriesName() === payload.titleName) {
                     uiState.selectedEpisode = payload.episodeNo;
                 }
@@ -1336,7 +1304,10 @@ function renderAdminPanel(adminPanelContainer) {
             if (!payload.titleName || Number.isNaN(payload.episodeNo) || Number.isNaN(payload.newEpisodeNo)) return;
 
             try {
-                const responseJson = await requestJsonApiOrThrow('/api/episodes', {method: 'PATCH', body: JSON.stringify(payload)});
+                const responseJson = await requestJsonApiOrThrow('/api/episodes', {
+                    method: 'PATCH',
+                    body: JSON.stringify(payload)
+                });
                 showFlashMessage(getSuccessMessage(responseJson, '剧集信息修改成功'));
                 await reloadBaseDataAndRender();
             } catch (error) {
@@ -1369,7 +1340,10 @@ function renderAdminPanel(adminPanelContainer) {
             if (!confirm(`确认删除「${payload.titleName}」第${payload.episodeNo}集？`)) return;
 
             try {
-                const responseJson = await requestJsonApiOrThrow('/api/episodes', {method: 'DELETE', body: JSON.stringify(payload)});
+                const responseJson = await requestJsonApiOrThrow('/api/episodes', {
+                    method: 'DELETE',
+                    body: JSON.stringify(payload)
+                });
                 showFlashMessage(getSuccessMessage(responseJson, '剧集删除成功'));
                 await reloadBaseDataAndRender();
             } catch (error) {
