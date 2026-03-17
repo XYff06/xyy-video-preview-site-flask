@@ -125,7 +125,7 @@ def api_tags_post():
 
     # 创建成功后返回201
     # data里顺手回传创建成功的标签名，前端可以直接复用
-    return build_json_response(201, message=f"<{created_tag_name}>标签已创建，请为剧集分配此标签", data=created_tag_name)
+    return build_json_response(201, message=f"<{created_tag_name}>标签已创建")
 
 
 @flask_app.route("/api/tags/<path:tag_name>", methods=["PATCH"])
