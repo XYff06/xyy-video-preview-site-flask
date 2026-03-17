@@ -404,7 +404,7 @@ function renderFlashMessageHtml() {
     if (!uiState.flashMessage) return '';
     return `
     <div class="flash-message" role="status">
-      <span class="flash-text">${uiState.flashMessage}</span>
+      <span class="flash-text">${escapeHtml(uiState.flashMessage)}</span>
       <button type="button" class="flash-close" id="flash-close-btn" aria-label="关闭提示">✕</button>
     </div>
   `;
