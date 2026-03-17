@@ -68,6 +68,15 @@ def open_db_connection():
         db_connection.close()
 
 
+@flask_app.route("/api/health", methods=["GET"])
+def api_health():
+    """检查Flask接口是否能正常执行；检查数据库是否可用"""
+    with open_db_connection() as db_connection, db_connection.cursor() as db_cursor:
+        db_cursor.execute("SELECT 1")
+        db_cursor.fetchone()
+    return build_json_response(200, result="ok")
+
+
 @contextmanager
 def open_db_connection_in_transaction():
     """
@@ -155,57 +164,8 @@ def api_tags_delete(tag_name):
         if db_cursor.rowcount == 0:
             return build_json_response(404, message=f"<{tag_name}>标签不存在")
     # 标签删除成功，返回200
+    # TODO: 返回引用数，让前端二次确认更明确
     return build_json_response(200, message=f"<{tag_name}>标签已删除")
-
-
-# def query_flat_episode_ingest_records():
-#     """查询按剧集展开的导入记录列表
-#
-#     返回结果已经是管理视图可直接消费的扁平结构
-#     """
-#     with open_db_connection() as conn, conn.cursor() as cur:
-#         cur.execute(
-#             """
-#             SELECT t.name,
-#                    e.episode_no        AS episode,
-#                    t.cover_url         AS poster,
-#                    e.episode_url       AS "videoUrl",
-#                    e.first_ingested_at AS "firstIngestedAt",
-#                    e.updated_at        AS "updatedAt",
-#                    COALESCE(
-#                            ARRAY_AGG(g.tag_name ORDER BY g.sort_no, g.tag_name) FILTER(WHERE g.tag_name IS NOT NULL),
-#                            ARRAY[] ::text[]
-#                    )                   AS tags
-#             FROM title t
-#                      JOIN episode e ON e.title_id = t.id
-#                      LEFT JOIN title_tag tt ON tt.title_id = t.id
-#                      LEFT JOIN tag g ON g.id = tt.tag_id
-#             GROUP BY t.id, e.id
-#             ORDER BY t.name, e.episode_no
-#             """
-#         )
-#         rows = cur.fetchall()
-#     out = []
-#     for row in rows:
-#         # 这里按剧集逐条展开
-#         # 前端管理视图可以直接按行渲染每一集的导入信息
-#         out.append(
-#             {
-#                 "name": row["name"],
-#                 "episode": int(row["episode"]),
-#                 "poster": row["poster"],
-#                 "videoUrl": row["videoUrl"],
-#                 "firstIngestedAt": convert_to_iso_datetime(row["firstIngestedAt"]),
-#                 "updatedAt": convert_to_iso_datetime(row["updatedAt"]),
-#                 "tags": row.get("tags") or [],
-#             }
-#         )
-#     return out
-#
-#
-# @flask_app.route("/api/ingest-records", methods=["GET"])
-# def api_ingest_records():
-#     return build_json_response(200, data=query_flat_episode_ingest_records())
 
 
 def get_required_oss_config():
@@ -350,15 +310,6 @@ def convert_to_iso_datetime(value):
     if isinstance(value, datetime):
         return value.isoformat()
     return value
-
-
-@flask_app.route("/api/health", methods=["GET"])
-def api_health():
-    """检查Flask接口是否能正常执行；检查数据库是否可用"""
-    with open_db_connection() as db_connection, db_connection.cursor() as db_cursor:
-        db_cursor.execute("SELECT 1")
-        db_cursor.fetchone()
-    return build_json_response(200, result="ok")
 
 
 def normalize_positive_int(value, default, max_value=None):
