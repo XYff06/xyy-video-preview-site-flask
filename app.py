@@ -159,7 +159,7 @@ def get_required_oss_config():
         if not current
     ]
     if missing:
-        raise Exception(f"缺少OSS配置: {"、".join(missing)}")
+        raise ValueError(f"缺少OSS配置: {'、'.join(missing)}")
     return access_key, secret_key, endpoint, region, bucket_name
 
 
@@ -185,14 +185,14 @@ def resolve_resource_to_url(value: str, name: str, local_path_kind: str = "any")
     try:
         path_object = Path(normalized).expanduser().resolve(strict=True)
     except FileNotFoundError:
-        raise Exception(f"Not Found: {normalized}")
-    except Exception as e:
-        raise Exception(f"路径解析失败: {e}")
+        raise ValueError(f"Not Found: {normalized}")
+    except Exception as path_error:
+        raise ValueError(f"路径解析失败: {path_error}")
 
     client = tos.TosClientV2(access_key, secret_key, endpoint, region)
 
     if local_path_kind not in {"any", "file", "dir"}:
-        raise Exception(f"local_path_kind参数错误: {local_path_kind}")
+        raise ValueError(f"local_path_kind参数错误: {local_path_kind}")
 
     # 文件输入会上传一个对象并返回单个访问地址
     if path_object.is_file():
@@ -203,7 +203,7 @@ def resolve_resource_to_url(value: str, name: str, local_path_kind: str = "any")
         key = f"{name}/{filename_with_timestamp}"
         response = client.put_object_from_file(bucket_name, key, str(path_object))
         if getattr(response, "status_code", None) != 200:
-            raise Exception(f"上传失败，status_code={getattr(response, "status_code", "unknown")}")
+            raise ValueError(f"上传失败，status_code={getattr(response, 'status_code', 'unknown')}")
         return f"https://{bucket_name}.{endpoint}/{key}"
 
     # 目录输入会递归上传所有文件，返回值会是一组可直接访问的视频地址列表
@@ -229,7 +229,7 @@ def resolve_resource_to_url(value: str, name: str, local_path_kind: str = "any")
 
             response = client.put_object_from_file(bucket_name, key, str(file_path))
             if getattr(response, "status_code", None) != 200:
-                raise Exception(f"上传失败: {file_path}，status_code={getattr(response, "status_code", "unknown")}")
+                raise ValueError(f"上传失败: {file_path}，status_code={getattr(response, 'status_code', 'unknown')}")
 
             url_list.append(f"https://{bucket_name}.{endpoint}/{key}")
 
@@ -443,7 +443,7 @@ def query_series_page_data(tag=None, name=None, search=None, sort=None, page=1, 
         values.append(f"%{search.strip().lower()}%")
         filters.append("LOWER(title.name) LIKE %s")
 
-    where_clause = f"WHERE {" AND ".join(filters)}" if filters else ""
+    where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
     order_by_clause = build_series_order_by_sql(sort)
     order_by_selected_titles = order_by_clause.replace("title.", "paged_titles.")
 
@@ -625,7 +625,59 @@ def replace_title_tags(conn: psycopg.Connection, title_id: int, tags: list[str])
 
 
 def parse_chinese_numeral(raw: str | None):
-    pass
+    """把中文数字或阿拉伯数字文本解析成正整数"""
+    if raw is None:
+        return None
+
+    normalized_raw = str(raw).strip()
+    if not normalized_raw:
+        return None
+
+    if normalized_raw.isdigit():
+        value = int(normalized_raw)
+        return value if value > 0 else None
+
+    digit_map = {
+        "零": 0,
+        "〇": 0,
+        "一": 1,
+        "二": 2,
+        "两": 2,
+        "三": 3,
+        "四": 4,
+        "五": 5,
+        "六": 6,
+        "七": 7,
+        "八": 8,
+        "九": 9,
+    }
+    unit_map = {
+        "十": 10,
+        "百": 100,
+        "千": 1000,
+    }
+
+    total_value = 0
+    current_digit = 0
+    saw_chinese_numeral = False
+    for char in normalized_raw:
+        if char in digit_map:
+            current_digit = digit_map[char]
+            saw_chinese_numeral = True
+            continue
+        if char in unit_map:
+            saw_chinese_numeral = True
+            unit_value = unit_map[char]
+            total_value += (current_digit or 1) * unit_value
+            current_digit = 0
+            continue
+        return None
+
+    if not saw_chinese_numeral:
+        return None
+
+    total_value += current_digit
+    return total_value if total_value > 0 else None
 
 
 def extract_episode_number_from_text(raw_text: str | None):
