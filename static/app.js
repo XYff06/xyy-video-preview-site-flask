@@ -211,7 +211,36 @@ async function loadHomeSeriesPageData() {
  * @returns {string[]} 排序后的标签列表
  */
 function collectAvailableTags() {
-    return [...uiState.allTags];
+    if (uiState.allTags.length > 0) {
+        return [...uiState.allTags];
+    }
+
+    /**
+     * /api/tags 为空时
+     * 退回到当前已加载的漫剧数据里汇总标签
+     * 这样首页即使只有 /api/series 带回了 tags 也能先把筛选项渲染出来
+     */
+    const fallbackTagSet = new Set();
+
+    uiState.homeSeries.forEach((series) => {
+        const seriesTags = series.tags instanceof Set ? [...series.tags] : series.tags || [];
+        seriesTags.forEach((tagName) => {
+            if (String(tagName || '').trim()) {
+                fallbackTagSet.add(String(tagName).trim());
+            }
+        });
+    });
+
+    Object.values(uiState.seriesDetailsByName).forEach((seriesDetail) => {
+        const seriesTags = seriesDetail.tags instanceof Set ? [...seriesDetail.tags] : seriesDetail.tags || [];
+        seriesTags.forEach((tagName) => {
+            if (String(tagName || '').trim()) {
+                fallbackTagSet.add(String(tagName).trim());
+            }
+        });
+    });
+
+    return [...fallbackTagSet].sort((leftTagName, rightTagName) => leftTagName.localeCompare(rightTagName, 'zh-CN'));
 }
 
 
@@ -509,15 +538,15 @@ function render() {
                 });
         }
     } else {
-        renderHome(pageContent);
+        renderHomePage(pageContent);
     }
 }
 
 function renderHome(container) {
     container.innerHTML = document.getElementById('home-template').innerHTML;
     const topRowLeft = document.getElementById('top-row-left');
-    topRowLeft.innerHTML = '<header class="categories" id="category-list"></header>';
-    const categoryList = document.getElementById('category-list');
+    topRowLeft.innerHTML = '<header class="categories"></header>';
+    const categoryList = topRowLeft.querySelector('.categories');
     const grid = document.getElementById('series-grid');
     const homePage = container.querySelector('.home-page');
 
@@ -682,6 +711,209 @@ function renderHome(container) {
     };
 
     container.querySelector('.home-page').appendChild(pagination);
+}
+
+function renderHomePage(container) {
+    container.innerHTML = document.getElementById('home-template').innerHTML;
+
+    const topRowLeft = document.getElementById('top-row-left');
+    topRowLeft.innerHTML = '<header class="categories"></header>';
+
+    const categoryList = topRowLeft.querySelector('.categories');
+    const homePage = container.querySelector('.home-page');
+    const grid = container.querySelector('#series-grid');
+
+    const searchBar = document.createElement('section');
+    searchBar.className = 'home-toolbar';
+
+    const searchForm = document.createElement('form');
+    searchForm.className = 'toolbar';
+
+    const searchInput = document.createElement('input');
+    searchInput.className = 'global-search';
+    searchInput.type = 'search';
+    searchInput.placeholder = '输入漫剧名搜索';
+    searchInput.value = uiState.searchQuery;
+
+    const searchButton = document.createElement('button');
+    searchButton.type = 'submit';
+    searchButton.className = 'primary-button search-button';
+    searchButton.textContent = '搜索';
+
+    const sortSelect = document.createElement('select');
+    sortSelect.className = 'global-sort';
+    sortSelect.setAttribute('aria-label', '排序依据');
+
+    [
+        {value: 'updated_desc', label: '最后更新时间(倒序)'},
+        {value: 'updated_asc', label: '最后更新时间(顺序)'},
+        {value: 'ingested_asc', label: '最早入库时间(顺序)'},
+        {value: 'ingested_desc', label: '最早入库时间(倒序)'},
+        {value: 'name_asc', label: '名称(顺序)'},
+        {value: 'name_desc', label: '名称(倒序)'}
+    ].forEach((sortOption) => {
+        const option = document.createElement('option');
+        option.value = sortOption.value;
+        option.textContent = sortOption.label;
+        option.selected = uiState.sortBy === sortOption.value;
+        sortSelect.appendChild(option);
+    });
+
+    searchForm.appendChild(searchInput);
+    searchForm.appendChild(searchButton);
+    searchForm.appendChild(sortSelect);
+    searchBar.appendChild(searchForm);
+    homePage.insertBefore(searchBar, grid);
+
+    const allTags = collectAvailableTags();
+    const visibleTags = uiState.tagExpanded ? allTags : allTags.slice(0, 5);
+    const selectedHiddenTag = !uiState.tagExpanded && uiState.selectedTag !== null && !visibleTags.includes(uiState.selectedTag);
+    const navItems = [{type: 'all', label: '全部'}, ...visibleTags.map((tagName) => ({
+        type: 'tag',
+        label: tagName
+    })), {type: 'more', label: uiState.tagExpanded ? '收起' : '更多'}];
+
+    navItems.forEach((item) => {
+        const button = document.createElement('button');
+        const isActive = item.type === 'all'
+            ? uiState.selectedTag === null
+            : item.type === 'tag'
+                ? uiState.selectedTag === item.label
+                : uiState.tagExpanded || selectedHiddenTag;
+
+        button.className = `category-pill ${isActive ? 'active' : ''}`;
+        button.textContent = item.label;
+        button.onclick = () => {
+            if (item.type === 'all') {
+                uiState.selectedTag = null;
+            } else if (item.type === 'tag') {
+                uiState.selectedTag = item.label;
+            } else {
+                uiState.tagExpanded = !uiState.tagExpanded;
+            }
+
+            uiState.currentPage = 1;
+            loadHomeSeriesPageData();
+        };
+        categoryList.appendChild(button);
+    });
+
+    searchForm.onsubmit = (event) => {
+        event.preventDefault();
+        uiState.searchQuery = searchInput.value;
+        uiState.sortBy = sortSelect.value;
+        uiState.currentPage = 1;
+        loadHomeSeriesPageData();
+    };
+
+    sortSelect.onchange = () => {
+        uiState.sortBy = sortSelect.value;
+        uiState.currentPage = 1;
+        loadHomeSeriesPageData();
+    };
+
+    if (uiState.homeError) {
+        grid.innerHTML = `<p class="empty-uiState">加载失败: ${escapeHtml(uiState.homeError)}</p>`;
+        return;
+    }
+
+    if (uiState.homeLoading) {
+        grid.innerHTML = '<p class="empty-uiState">正在加载列表...</p>';
+        return;
+    }
+
+    const pageSeries = uiState.homeSeries;
+    if (pageSeries.length === 0) {
+        grid.innerHTML = '<p class="empty-uiState">没有匹配的漫剧</p>';
+        return;
+    }
+
+    pageSeries.forEach((series) => {
+        const maxEpisode = Number(series.currentMaxEpisodeNo) || 0;
+        const totalEpisodes = Number(series.totalEpisodeCount) || 0;
+        const card = document.createElement('article');
+        card.className = 'poster-card';
+        card.innerHTML = `
+        <div class="poster" style="background-image:url('${escapeHtml(series.poster || '')}')"></div>
+        <p class="poster-title">${escapeHtml(series.name)}</p>
+        <p class="poster-meta">最大集数:${maxEpisode}<br>总集数:${totalEpisodes}<br>最后更新时间:<br>${escapeHtml(formatDateTimeZhCN(series.updatedAt))}<br>入库时间:<br>${escapeHtml(formatDateTimeZhCN(series.firstIngestedAt))}</p>
+      `;
+        card.onclick = () => {
+            history.pushState({}, '', `/${encodeURIComponent(series.name)}`);
+            uiState.selectedEpisode = null;
+            render();
+        };
+        grid.appendChild(card);
+    });
+
+    const totalPages = Math.max(1, Math.ceil(uiState.homeTotal / uiState.pageSize));
+    const buildPageList = () => {
+        const pages = new Set([1, totalPages]);
+        for (let pageNo = uiState.currentPage - 2; pageNo <= uiState.currentPage + 2; pageNo += 1) {
+            if (pageNo >= 1 && pageNo <= totalPages) {
+                pages.add(pageNo);
+            }
+        }
+        return [...pages].sort((leftPageNo, rightPageNo) => leftPageNo - rightPageNo);
+    };
+
+    const pageItems = buildPageList();
+    const pagination = document.createElement('div');
+    pagination.className = 'pagination';
+    pagination.innerHTML = `
+    <button type="button" class="page-btn" data-page="prev" ${uiState.currentPage === 1 ? 'disabled' : ''}>上一页</button>
+    <div class="page-numbers">
+      ${pageItems.map((pageNo, index) => {
+        const previousPageNo = pageItems[index - 1];
+        const ellipsis = previousPageNo && pageNo - previousPageNo > 1 ? '<span class="page-ellipsis">...</span>' : '';
+        return `${ellipsis}<button type="button" class="page-number-btn ${pageNo === uiState.currentPage ? 'active' : ''}" data-page-no="${pageNo}">${pageNo}</button>`;
+    }).join('')}
+    </div>
+    <button type="button" class="page-btn" data-page="next" ${uiState.currentPage === totalPages ? 'disabled' : ''}>下一页</button>
+    <span class="page-meta">第${uiState.currentPage}/${totalPages}页 共${uiState.homeTotal}条</span>
+    <form class="page-jump-form" id="home-page-jump-form">
+      <label for="home-page-jump-input">跳转</label>
+      <input id="home-page-jump-input" type="number" min="1" max="${totalPages}" value="${uiState.currentPage}" />
+      <button type="submit" class="page-jump-btn">确定</button>
+    </form>
+  `;
+
+    const prevButton = pagination.querySelector('[data-page="prev"]');
+    const nextButton = pagination.querySelector('[data-page="next"]');
+    prevButton.onclick = () => {
+        if (uiState.currentPage <= 1) return;
+        uiState.currentPage -= 1;
+        loadHomeSeriesPageData();
+    };
+    nextButton.onclick = () => {
+        if (uiState.currentPage >= totalPages) return;
+        uiState.currentPage += 1;
+        loadHomeSeriesPageData();
+    };
+
+    pagination.querySelectorAll('[data-page-no]').forEach((button) => {
+        button.onclick = () => {
+            const targetPageNo = Number(button.dataset.pageNo);
+            if (!Number.isFinite(targetPageNo) || targetPageNo === uiState.currentPage) return;
+            uiState.currentPage = targetPageNo;
+            loadHomeSeriesPageData();
+        };
+    });
+
+    const jumpForm = pagination.querySelector('#home-page-jump-form');
+    jumpForm.onsubmit = (event) => {
+        event.preventDefault();
+        const nextPageNo = Number(pagination.querySelector('#home-page-jump-input').value);
+        if (!Number.isFinite(nextPageNo)) return;
+
+        const safePageNo = Math.min(totalPages, Math.max(1, Math.floor(nextPageNo)));
+        if (safePageNo === uiState.currentPage) return;
+
+        uiState.currentPage = safePageNo;
+        loadHomeSeriesPageData();
+    };
+
+    homePage.appendChild(pagination);
 }
 
 /**

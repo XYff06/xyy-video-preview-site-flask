@@ -769,11 +769,11 @@ def query_series_page_data(tag=None, name=None, search=None, sort=None, page=1, 
               paged_titles.id,
               paged_titles.name,
               paged_titles.cover_url AS poster,
-              paged_titles.first_ingested_at AS firstIngestedAt,
-              paged_titles.updated_at AS updatedAt,
-              paged_titles.total_episode_count AS totalEpisodeCount,
-              paged_titles.current_max_episode_no AS currentMaxEpisodeNo,
-              paged_titles.last_new_episode_at AS lastNewEpisodeAt,
+              paged_titles.first_ingested_at AS "firstIngestedAt",
+              paged_titles.updated_at AS "updatedAt",
+              paged_titles.total_episode_count AS "totalEpisodeCount",
+              paged_titles.current_max_episode_no AS "currentMaxEpisodeNo",
+              paged_titles.last_new_episode_at AS "lastNewEpisodeAt",
               COALESCE(tag_summary.tags, ARRAY[]::text[]) AS tags
             FROM paged_titles
             LEFT JOIN LATERAL (
