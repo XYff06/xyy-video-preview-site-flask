@@ -674,15 +674,6 @@ def api_episodes_delete():
     return build_json_response(200, message="剧集删除成功")
 
 
-def convert_to_iso_datetime(value):
-    """把数据库时间值统一转换成ISO字符串"""
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value.isoformat()
-    return value
-
-
 def normalize_positive_int(value, default, max_value=None):
     """
     把输入值规范成正整数
@@ -721,59 +712,6 @@ def build_series_order_by_sql(sort: str | None) -> str:
     return sort_map.get(sort or "", sort_map["updated_desc"])
 
 
-def build_series_page_cache_key(tag=None, name=None, search=None, sort=None, page=1, page_size=25):
-    """把分页查询参数整理成稳定缓存键，命中后可以直接复用列表结果"""
-    normalized_search = search.strip().lower() if isinstance(search, str) and search.strip() else None
-    return tag, name, normalized_search, sort or "updated_desc", page, page_size
-
-
-def serialize_series_record(row):
-    """把聚合后的漫剧记录转换成前端可直接渲染的结构"""
-    episodes = row.get("episodes") or []
-    return {
-        "id": row["id"],
-        "name": row["name"],
-        "poster": row["poster"],
-        "firstIngestedAt": convert_to_iso_datetime(row["firstIngestedAt"]),
-        "updatedAt": convert_to_iso_datetime(row["updatedAt"]),
-        "lastNewEpisodeAt": convert_to_iso_datetime(row["lastNewEpisodeAt"]),
-        "tags": row.get("tags") or [],
-        # 列表推导会把聚合结果里的每一集重新整理成统一字段
-        "episodes": [
-            {
-                "episode": int(episode["episode"]),
-                "firstIngestedAt": convert_to_iso_datetime(episode["firstIngestedAt"]),
-                "updatedAt": convert_to_iso_datetime(episode["updatedAt"]),
-                "videoUrl": episode["videoUrl"],
-            }
-            for episode in episodes
-        ],
-    }
-
-
-def serialize_series_list_record(row):
-    """把列表查询结果整理成首页卡片可直接消费的结构"""
-    return {
-        "id": row["id"],
-        "name": row["name"],
-        "poster": row["poster"],
-        "firstIngestedAt": convert_to_iso_datetime(row["firstIngestedAt"]),
-        "updatedAt": convert_to_iso_datetime(row["updatedAt"]),
-        "lastNewEpisodeAt": convert_to_iso_datetime(row["lastNewEpisodeAt"]),
-        "tags": row.get("tags") or [],
-        "totalEpisodeCount": int(row.get("totalEpisodeCount") or 0),
-        "currentMaxEpisodeNo": int(row.get("currentMaxEpisodeNo") or 0),
-    }
-
-
-def serialize_series_detail_record(row):
-    """把详情查询结果整理成详情页可直接消费的结构"""
-    payload = serialize_series_record(row)
-    payload["totalEpisodeCount"] = int(row.get("totalEpisodeCount") or len(payload["episodes"]))
-    payload["currentMaxEpisodeNo"] = int(row.get("currentMaxEpisodeNo") or 0)
-    return payload
-
-
 def query_series_page_data(tag=None, name=None, search=None, sort=None, page=1, page_size=25):
     """
     把前端传来的筛选条件转换成SQL:
@@ -781,6 +719,7 @@ def query_series_page_data(tag=None, name=None, search=None, sort=None, page=1, 
     2. 把每部漫剧关联的标签和剧集一起聚合出来
     3. 最后整理成前端直接能渲染的JSON结构
     """
+    # TODO: 优化性能
     filters = []  # filters保存WHERE里的条件片段
     values = []  # values保存这些条件对应的参数值
 
@@ -867,6 +806,76 @@ def query_series_page_data(tag=None, name=None, search=None, sort=None, page=1, 
     return payload
 
 
+@flask_app.route("/api/series", methods=["GET"])
+def api_series():
+    """根据前端传来的查询参数，返回"漫剧列表页"需要的数据，支持: 标签筛选、名称筛选、关键字搜索、排序、分页"""
+    payload = query_series_page_data(
+        tag=request.args.get("tag"),
+        name=request.args.get("name"),
+        search=request.args.get("search"),
+        sort=request.args.get("sort"),
+        page=normalize_positive_int(request.args.get("page"), 1),
+        page_size=normalize_positive_int(request.args.get("pageSize"), 25, 100),
+    )
+    return build_json_response(200, **payload)
+
+
+def convert_to_iso_datetime(value):
+    """把数据库时间值统一转换成ISO字符串"""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return value
+
+
+def serialize_series_record(row):
+    """把聚合后的漫剧记录转换成前端可直接渲染的结构"""
+    episodes = row.get("episodes") or []
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "poster": row["poster"],
+        "firstIngestedAt": convert_to_iso_datetime(row["firstIngestedAt"]),
+        "updatedAt": convert_to_iso_datetime(row["updatedAt"]),
+        "lastNewEpisodeAt": convert_to_iso_datetime(row["lastNewEpisodeAt"]),
+        "tags": row.get("tags") or [],
+        # 列表推导会把聚合结果里的每一集重新整理成统一字段
+        "episodes": [
+            {
+                "episode": int(episode["episode"]),
+                "firstIngestedAt": convert_to_iso_datetime(episode["firstIngestedAt"]),
+                "updatedAt": convert_to_iso_datetime(episode["updatedAt"]),
+                "videoUrl": episode["videoUrl"],
+            }
+            for episode in episodes
+        ],
+    }
+
+
+def serialize_series_list_record(row):
+    """把列表查询结果整理成首页卡片可直接消费的结构"""
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "poster": row["poster"],
+        "firstIngestedAt": convert_to_iso_datetime(row["firstIngestedAt"]),
+        "updatedAt": convert_to_iso_datetime(row["updatedAt"]),
+        "lastNewEpisodeAt": convert_to_iso_datetime(row["lastNewEpisodeAt"]),
+        "tags": row.get("tags") or [],
+        "totalEpisodeCount": int(row.get("totalEpisodeCount") or 0),
+        "currentMaxEpisodeNo": int(row.get("currentMaxEpisodeNo") or 0),
+    }
+
+
+def serialize_series_detail_record(row):
+    """把详情查询结果整理成详情页可直接消费的结构"""
+    payload = serialize_series_record(row)
+    payload["totalEpisodeCount"] = int(row.get("totalEpisodeCount") or len(payload["episodes"]))
+    payload["currentMaxEpisodeNo"] = int(row.get("currentMaxEpisodeNo") or 0)
+    return payload
+
+
 def query_series_detail_data(title_name: str):
     """按标题名返回单个漫剧详情，包含完整剧集列表"""
     with open_db_connection() as db_connection, db_connection.cursor() as db_cursor:
@@ -913,20 +922,6 @@ def query_series_detail_data(title_name: str):
         )
         row = db_cursor.fetchone()
     return serialize_series_detail_record(row) if row else None
-
-
-@flask_app.route("/api/series", methods=["GET"])
-def api_series():
-    """根据前端传来的查询参数，返回"漫剧列表页"需要的数据，支持: 标签筛选、名称筛选、关键字搜索、排序、分页"""
-    payload = query_series_page_data(
-        tag=request.args.get("tag"),
-        name=request.args.get("name"),
-        search=request.args.get("search"),
-        sort=request.args.get("sort"),
-        page=normalize_positive_int(request.args.get("page"), 1),
-        page_size=normalize_positive_int(request.args.get("pageSize"), 25, 100),
-    )
-    return build_json_response(200, **payload)
 
 
 @flask_app.route("/api/series/<path:title_name>", methods=["GET"])
