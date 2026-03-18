@@ -427,7 +427,7 @@ def api_titles_patch(title_name):
     except Exception as e:
         return build_json_response(400, message=str(e))
     # 漫剧信息修改成功，返回200
-    return build_json_response(200, message="漫剧信息修改成功")
+    return build_json_response(200, message=f"<{title_name}>漫剧信息修改成功，新漫剧名: <{new_title_name}>")
 
 
 @flask_app.route("/api/titles/<path:title_name>", methods=["DELETE"])
@@ -444,21 +444,44 @@ def api_titles_delete(title_name):
 
 @flask_app.route("/api/episodes/batch-directory", methods=["POST"])
 def api_episodes_batch_directory():
-    """按目录批量导入剧集
+    """按目录批量导入剧集"""
+    # 尝试把请求体解析成JSON，如果解析失败、请求体为空或者不是合法JSON，就用空字典兜底
+    request_body = request.get_json(silent=True) or {}
+    if not is_valid_text(request_body.get("name")):
+        return build_json_response(400, message="无效name")
+    title_name = request_body["name"].strip()
+    if not is_valid_text(request_body.get("directoryUrl")):
+        return build_json_response(400, message="无效directoryUrl")
+    directory_url = request_body["directoryUrl"].strip()
+    raw_poster = str(request_body.get("poster") or "").strip()  # 如果没有poster，那么就用"暂无海报"来作为封面
+    selected_tags = [tag_name.strip() for tag_name in request_body.get("tags", []) if is_valid_text(tag_name)]
+    selected_tags = list(dict.fromkeys(selected_tags))
 
-    支持目录 URL
-    也支持本地目录上传后再解析
-    """
-    body = request.get_json(silent=True) or {}
-    name = str(body.get("name") or "").strip()
-    poster = str(body.get("poster") or "").strip()
-    directory_url = str(body.get("directoryUrl") or "").strip()
-    # 列表推导会先过滤空标签
-    # 再把保留下来的标签名裁掉首尾空白
-    tags = [tag.strip() for tag in body.get("tags", []) if is_valid_text(tag)]
+    try:
+        # 开启事务执行创建，创建成功会提交，失败会回滚
+        with open_db_connection_in_transaction() as db_connection, db_connection.cursor() as db_cursor:
+            # 创建一条只有name、cover_url=None的漫剧记录
+            db_cursor.execute("INSERT INTO title(name, cover_url) VALUES (%s, %s) RETURNING id", (title_name, None), )
+            created_title_id = db_cursor.fetchone()["id"]  # 这条记录的id
+            # title_tag
+            if selected_tags:
+                # 去tag表里查，selected_tags这些标签名里哪些是真实存在于数据库中的
+                db_cursor.execute("SELECT tag_name FROM tag WHERE tag_name = ANY(%s)", (selected_tags,), )
+                existing_tag_names = {row["tag_name"] for row in db_cursor.fetchall()}
+                missing_tag_names = [tag_name for tag_name in selected_tags if tag_name not in existing_tag_names]
+                if missing_tag_names:
+                    raise Exception(f"以下标签不存在: {'、'.join(missing_tag_names)}")
+            replace_title_tags(db_connection, created_title_id, selected_tags)
+            if raw_poster:
+                poster_url = resolve_resource_to_url(raw_poster, str(created_title_id), local_path_kind="file", )
+                db_cursor.execute("UPDATE title SET cover_url = %s WHERE id = %s", (poster_url, created_title_id), )
+    except UniqueViolation:
+        return build_json_response(409, message=f"<{title_name}>漫剧名称已存在")
+    except Exception as e:
+        return build_json_response(400, message=str(e))
+    # 漫剧创建成功，返回201
+    return build_json_response(201, message=f"<{title_name}>漫剧已创建")
 
-    if not name or not poster or not directory_url:
-        return build_json_response(400, message="name、poster、directoryUrl 不能为空")
     if not tags:
         return build_json_response(400, message="tags 至少需要一个标签")
 

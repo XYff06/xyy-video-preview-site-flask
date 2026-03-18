@@ -93,6 +93,14 @@ function normalizeSeriesSummaryRecord(seriesRecord) {
     };
 }
 
+function normalizeTitleOptionRecord(titleRecord) {
+    return {
+        name: titleRecord.name,
+        poster: titleRecord.poster || titleRecord.cover_url || '',
+        tags: new Set(titleRecord.tags || [])
+    };
+}
+
 function normalizeSeriesDetailRecord(seriesRecord) {
     const normalizedDetailRecord = {
         ...normalizeSeriesSummaryRecord(seriesRecord),
@@ -136,8 +144,12 @@ async function reloadBaseDataAndRender() {
     const activeSeriesName = getCurrentRouteSeriesName();
 
     try {
-        const tagListResponse = await requestJsonApiOrThrow('/api/tags');
+        const [tagListResponse, titleListResponse] = await Promise.all([
+            requestJsonApiOrThrow('/api/tags'),
+            requestJsonApiOrThrow('/api/titles')
+        ]);
         uiState.allTags = tagListResponse.data;
+        uiState.allSeries = (titleListResponse.data || []).map(normalizeTitleOptionRecord);
         uiState.seriesDetailsByName = {};
         uiState.loading = false;
         uiState.error = null;
