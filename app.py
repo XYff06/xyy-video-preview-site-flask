@@ -114,6 +114,7 @@ def is_valid_text(value) -> bool:
 @flask_app.route("/api/tags", methods=["GET"])
 def api_tags_get():
     """查询全部标签，从tag表里查出所有tag_name，按tag_name升序排序，把查询结果整理成纯字符串列表返回给前端"""
+    # TODO: 确认tag_name有索引，给接口加短时缓存，前端减少重复请求
     # 打开数据库连接并创建游标对象，with结束后连接和游标都会自动关闭
     with open_db_connection() as db_connection, db_connection.cursor() as db_cursor:
         db_cursor.execute("SELECT tag_name FROM tag ORDER BY tag_name ASC")
@@ -149,6 +150,8 @@ def api_tags_patch(tag_name):
     if not is_valid_text(request_body.get("newTagName")):
         return build_json_response(400, message="无效newTagName")
     new_tag_name = request_body["newTagName"].strip()
+    if tag_name == new_tag_name:
+        return build_json_response(409, message=f"<{new_tag_name}>标签已存在")
     try:
         # 开启事务执行改名，改名成功会提交，失败会回滚
         with open_db_connection_in_transaction() as db_connection, db_connection.cursor() as db_cursor:
@@ -328,17 +331,17 @@ def resolve_resource_to_url(value: str, title_id: str, local_path_kind: str = "a
 @flask_app.route("/api/titles", methods=["GET"])
 def api_titles_get():
     """返回每部漫剧的基础信息: name、cover_url、tags"""
-    # TODO: 暂未明确做什么事情的接口
     with open_db_connection() as db_connection, db_connection.cursor() as db_cursor:
         db_cursor.execute(
             """
-            SELECT title.name,
-                   title.cover_url,
-                   COALESCE(ARRAY_AGG(tag.tag_name ORDER BY tag.tag_name) FILTER(WHERE tag.tag_name IS NOT NULL), ARRAY[] ::text[]) AS tags
+            SELECT title.name, title.cover_url, COALESCE(tag_summary.tags, ARRAY[]::text[]) AS tags
             FROM title
-                     LEFT JOIN title_tag ON title_tag.title_id = title.id
-                     LEFT JOIN tag ON tag.id = title_tag.tag_id
-            GROUP BY title.id, title.name, title.cover_url
+                     LEFT JOIN LATERAL (
+                SELECT ARRAY_AGG(tag.tag_name ORDER BY tag.tag_name) AS tags
+                FROM title_tag
+                         JOIN tag ON tag.id = title_tag.tag_id
+                WHERE title_tag.title_id = title.id
+                    ) AS tag_summary ON TRUE
             ORDER BY title.name ASC
             """
         )
