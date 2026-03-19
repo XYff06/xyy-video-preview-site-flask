@@ -752,7 +752,7 @@ def api_episodes_patch():
         except UniqueViolation:
             return build_json_response(409, message=f"<{title_name}>漫剧目标集号<{new_episode_no}>已存在")
         if db_cursor.rowcount == 0:
-            return build_json_response(404, message=f"<{title_name}>漫剧集号<{new_episode_no}>剧集不存在")
+            return build_json_response(404, message=f"<{title_name}>漫剧集号<{episode_no}>剧集不存在")
     return build_json_response(200, message=f"<{title_name}>漫剧剧集信息修改成功")
 
 
@@ -1046,70 +1046,8 @@ def api_series_detail(title_name):
     return build_json_response(200, data=payload)
 
 
-def serialize_episode_record(row):
-    """把单条剧集记录转换成前端响应结构"""
-    return {
-        "episode": int(row["episode"]),
-        "firstIngestedAt": convert_to_iso_datetime(row["firstIngestedAt"]),
-        "updatedAt": convert_to_iso_datetime(row["updatedAt"]),
-        "videoUrl": row["videoUrl"],
-    }
 
 
-def parse_chinese_numeral(raw: str | None):
-    """把中文数字或阿拉伯数字文本解析成正整数"""
-    if raw is None:
-        return None
-
-    normalized_raw = str(raw).strip()
-    if not normalized_raw:
-        return None
-
-    if normalized_raw.isdigit():
-        value = int(normalized_raw)
-        return value if value > 0 else None
-
-    digit_map = {
-        "零": 0,
-        "〇": 0,
-        "一": 1,
-        "二": 2,
-        "两": 2,
-        "三": 3,
-        "四": 4,
-        "五": 5,
-        "六": 6,
-        "七": 7,
-        "八": 8,
-        "九": 9,
-    }
-    unit_map = {
-        "十": 10,
-        "百": 100,
-        "千": 1000,
-    }
-
-    total_value = 0
-    current_digit = 0
-    saw_chinese_numeral = False
-    for char in normalized_raw:
-        if char in digit_map:
-            current_digit = digit_map[char]
-            saw_chinese_numeral = True
-            continue
-        if char in unit_map:
-            saw_chinese_numeral = True
-            unit_value = unit_map[char]
-            total_value += (current_digit or 1) * unit_value
-            current_digit = 0
-            continue
-        return None
-
-    if not saw_chinese_numeral:
-        return None
-
-    total_value += current_digit
-    return total_value if total_value > 0 else None
 
 
 @flask_app.route("/", defaults={"path": ""})
