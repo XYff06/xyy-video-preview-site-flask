@@ -335,27 +335,6 @@ def resolve_resource_to_url(value: str, title_id: str, local_path_kind: str = "a
     raise Exception("输入路径既不是文件也不是目录")
 
 
-@flask_app.route("/api/titles", methods=["GET"])
-def api_titles_get():
-    """返回每部漫剧的基础信息: name、cover_url、tags"""
-    with open_db_connection() as db_connection, db_connection.cursor() as db_cursor:
-        db_cursor.execute(
-            """
-            SELECT title.name, title.cover_url, COALESCE(tag_summary.tags, ARRAY[]::text[]) AS tags
-            FROM title
-                     LEFT JOIN LATERAL (
-                SELECT ARRAY_AGG(tag.tag_name ORDER BY tag.tag_name) AS tags
-                FROM title_tag
-                         JOIN tag ON tag.id = title_tag.tag_id
-                WHERE title_tag.title_id = title.id
-                    ) AS tag_summary ON TRUE
-            ORDER BY title.name ASC
-            """
-        )
-        title_rows = db_cursor.fetchall()
-    return build_json_response(200, data=title_rows)
-
-
 @flask_app.route("/api/titles", methods=["POST"])
 def api_titles_post():
     """创建漫剧"""
@@ -805,6 +784,77 @@ def normalize_positive_int(value, default, max_value=None):
     if max_value is not None:
         return min(parsed, max_value)
     return parsed
+
+
+@flask_app.route("/api/titles", methods=["GET"])
+def api_titles_get():
+    """返回管理面板使用的漫剧基础列表: name、cover_url、tags"""
+    search = str(request.args.get("search") or "").strip()
+    page = normalize_positive_int(request.args.get("page"), 1)
+    page_size = normalize_positive_int(request.args.get("pageSize"), 20, 100)
+    filters = []
+    values = []
+    if search:
+        values.append(f"%{search.lower()}%")
+        filters.append("LOWER(title.name) LIKE %s")
+    where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
+    with open_db_connection() as db_connection, db_connection.cursor() as db_cursor:
+        db_cursor.execute(f"SELECT COUNT(*)::int AS total FROM title {where_clause}", values)
+        total = db_cursor.fetchone()["total"] or 0
+        total_pages = max(1, math.ceil(total / page_size))
+        safe_page = max(1, min(page, total_pages))
+        offset = (safe_page - 1) * page_size
+        db_cursor.execute(
+            f"""
+            WITH paged_titles AS (
+              SELECT
+                title.id,
+                title.name,
+                title.cover_url
+              FROM
+                title {where_clause}
+              ORDER BY
+                title.name ASC,
+                title.id ASC
+              LIMIT
+                %s OFFSET %s
+            )
+            SELECT
+              paged_titles.name,
+              paged_titles.cover_url,
+              COALESCE(tag_summary.tags, ARRAY [] :: text []) AS tags
+            FROM
+              paged_titles
+              LEFT JOIN LATERAL (
+                SELECT
+                  ARRAY_AGG(
+                    tag.tag_name
+                    ORDER BY
+                      tag.tag_name
+                  ) AS tags
+                FROM
+                  title_tag
+                  JOIN tag ON tag.id = title_tag.tag_id
+                WHERE
+                  title_tag.title_id = paged_titles.id
+              ) AS tag_summary ON TRUE
+            ORDER BY
+              paged_titles.name ASC,
+              paged_titles.id ASC
+            """,
+            [*values, page_size, offset],
+        )
+        title_rows = db_cursor.fetchall()
+    return build_json_response(
+        200,
+        data=title_rows,
+        pagination={
+            "total": total,
+            "page": safe_page,
+            "pageSize": page_size,
+            "totalPages": total_pages,
+        },
+    )
 
 
 def build_series_order_by_sql(sort: str | None) -> str:
