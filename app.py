@@ -126,7 +126,6 @@ def is_valid_text(value) -> bool:
 @flask_app.route("/api/tags", methods=["GET"])
 def api_tags_get():
     """查询全部标签，从tag表里查出所有tag_name，按tag_name升序排序，把查询结果整理成纯字符串列表返回给前端"""
-    # TODO: 确认tag_name有索引，给接口加短时缓存，前端减少重复请求
     # 打开数据库连接并创建游标对象，with结束后连接和游标都会自动关闭
     with open_db_connection() as db_connection, db_connection.cursor() as db_cursor:
         db_cursor.execute("SELECT tag_name FROM tag ORDER BY tag_name ASC")
@@ -142,15 +141,15 @@ def api_tags_post():
     # 校验tagName是否有效
     if not is_valid_text(request_body.get("tagName")):
         return build_json_response(400, message="无效tagName")
-    created_tag_name = request_body["tagName"].strip()
+    tag_name = request_body["tagName"].strip()
     try:
         # 开启事务执行创建，创建成功会提交，失败会回滚
         with open_db_connection_in_transaction() as db_connection, db_connection.cursor() as db_cursor:
-            db_cursor.execute("INSERT INTO tag(tag_name) VALUES (%s)", (created_tag_name,))
+            db_cursor.execute("INSERT INTO tag(tag_name) VALUES (%s)", (tag_name,))
     except UniqueViolation:
-        return build_json_response(409, message=f"<{created_tag_name}>标签已存在")
+        return build_json_response(409, message=f"标签创建失败: 目标标签名<{tag_name}>已存在")
     # 标签创建成功，返回201
-    return build_json_response(201, message=f"<{created_tag_name}>标签已创建")
+    return build_json_response(201, message=f"标签创建成功: 目标标签名<{tag_name}>已创建")
 
 
 @flask_app.route("/api/tags/<path:tag_name>", methods=["PATCH"])
@@ -163,18 +162,18 @@ def api_tags_patch(tag_name):
         return build_json_response(400, message="无效newTagName")
     new_tag_name = request_body["newTagName"].strip()
     if tag_name == new_tag_name:
-        return build_json_response(409, message=f"<{new_tag_name}>标签已存在")
+        return build_json_response(400, message=f"标签重命名失败: 新旧标签名相同(<{new_tag_name}>)")
     try:
         # 开启事务执行改名，改名成功会提交，失败会回滚
         with open_db_connection_in_transaction() as db_connection, db_connection.cursor() as db_cursor:
             db_cursor.execute("UPDATE tag SET tag_name = %s WHERE tag_name = %s", (new_tag_name, tag_name))
             # 如果影响行数是0，说明原标签不存在
             if db_cursor.rowcount == 0:
-                return build_json_response(404, message=f"<{tag_name}>标签不存在")
+                return build_json_response(404, message=f"标签重命名失败: 原标签名<{tag_name}>不存在")
     except UniqueViolation:
-        return build_json_response(409, message=f"<{new_tag_name}>标签已存在")
+        return build_json_response(409, message=f"标签重命名失败: 目标标签名<{new_tag_name}>已存在")
     # 标签改名成功，返回200
-    return build_json_response(200, message=f"标签<{tag_name}>改名成功，新标签名: <{new_tag_name}>")
+    return build_json_response(200, message=f"标签重命名成功!!!原标签名: <{tag_name}>，新标签名: <{new_tag_name}>")
 
 
 @flask_app.route("/api/tags/<path:tag_name>", methods=["DELETE"])
@@ -185,10 +184,9 @@ def api_tags_delete(tag_name):
         db_cursor.execute("DELETE FROM tag WHERE tag_name = %s", (tag_name,))
         # 如果没有删到记录，说明这个标签不存在
         if db_cursor.rowcount == 0:
-            return build_json_response(404, message=f"<{tag_name}>标签不存在")
+            return build_json_response(404, message=f"标签删除失败: 目标标签名<{tag_name}>不存在")
     # 标签删除成功，返回200
-    # TODO: 返回引用数，让前端二次确认更明确
-    return build_json_response(200, message=f"<{tag_name}>标签已删除")
+    return build_json_response(200, message=f"标签删除成功: 目标标签名<{tag_name}>已删除")
 
 
 def replace_title_tags(db_connection: psycopg.Connection, title_id: int, tags: list[str]):
@@ -1058,4 +1056,4 @@ def spa(path: str):
 if __name__ == "__main__":
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "4173"))
-    flask_app.run(host=host, port=port, debug=False)
+    flask_app.run(host=host, port=port, debug=True)
