@@ -397,21 +397,6 @@ async function populateEpisodeSelectForSeries(titleSelect, episodeSelect, placeh
         .join('')}`;
 }
 
-function setFormFieldError(errorNode, message = '') {
-    if (!errorNode) return;
-    errorNode.textContent = message;
-    errorNode.classList.toggle('hidden', !message);
-}
-
-function validateMultiTagSelection(form, fieldName, errorNode, message) {
-    const checkboxes = [...form.querySelectorAll(`input[name="${fieldName}"]`)];
-    if (checkboxes.length === 0) return false;
-
-    const hasSelection = checkboxes.some((checkbox) => checkbox.checked);
-    setFormFieldError(errorNode, hasSelection ? '' : message);
-    return hasSelection;
-}
-
 function renderFlashMessageHtml() {
     if (!uiState.flashMessage) return '';
     return `
@@ -593,177 +578,6 @@ function render() {
     } else {
         renderHomePage(pageContent);
     }
-}
-
-function renderHome(container) {
-    container.innerHTML = document.getElementById('home-template').innerHTML;
-    const topRowLeft = document.getElementById('top-row-left');
-    topRowLeft.innerHTML = '<header class="categories"></header>';
-    const categoryList = topRowLeft.querySelector('.categories');
-    const grid = document.getElementById('series-grid');
-    const homePage = container.querySelector('.home-page');
-
-    const searchBar = document.createElement('section');
-    searchBar.className = 'home-toolbar';
-    searchBar.innerHTML = `
-    <form id="global-search-form" class="toolbar">
-      <input id="global-search" class="global-search" type="search" placeholder="全局搜索：输入漫剧名称" value="${escapeHtml(uiState.searchQuery)}" />
-        <button type="submit" class="primary-button search-button">搜索</button>
-      <select id="global-sort" class="global-sort" aria-label="排序依据">
-        <option value="updated_desc" ${uiState.sortBy === 'updated_desc' ? 'selected' : ''}>最后更新时间(倒序)</option>
-        <option value="updated_asc" ${uiState.sortBy === 'updated_asc' ? 'selected' : ''}>最后更新时间(顺序)</option>
-        <option value="ingested_asc" ${uiState.sortBy === 'ingested_asc' ? 'selected' : ''}>最早入库时间(顺序)</option>
-        <option value="ingested_desc" ${uiState.sortBy === 'ingested_desc' ? 'selected' : ''}>最早入库时间(倒序)</option>
-        <option value="name_asc" ${uiState.sortBy === 'name_asc' ? 'selected' : ''}>名称(顺序)</option>
-        <option value="name_desc" ${uiState.sortBy === 'name_desc' ? 'selected' : ''}>名称(倒序)</option>
-      </select>
-    </form>
-  `;
-    homePage.insertBefore(searchBar, grid);
-
-    const allTags = collectAvailableTags();
-    const visibleTags = uiState.tagExpanded ? allTags : allTags.slice(0, 5);
-    const selectedHiddenTag = !uiState.tagExpanded && uiState.selectedTag !== null && !visibleTags.includes(uiState.selectedTag);
-
-    const navItems = [{type: 'all', label: '全部'}, ...visibleTags.map((tag) => ({
-        type: 'tag', label: tag
-    })), {type: 'more', label: uiState.tagExpanded ? '收起' : '更多'}];
-
-    navItems.forEach((item) => {
-        const btn = document.createElement('button');
-        const isActive = item.type === 'all' ? uiState.selectedTag === null : item.type === 'tag' ? uiState.selectedTag === item.label : uiState.tagExpanded || selectedHiddenTag;
-
-        btn.className = `category-pill ${isActive ? 'active' : ''}`;
-        btn.textContent = item.label;
-
-        btn.onclick = () => {
-            if (item.type === 'all') {
-                uiState.selectedTag = null;
-            } else if (item.type === 'tag') {
-                uiState.selectedTag = item.label;
-            } else {
-                uiState.tagExpanded = !uiState.tagExpanded;
-            }
-            uiState.currentPage = 1;
-            loadHomeSeriesPageData();
-        };
-        categoryList.appendChild(btn);
-    });
-
-    const searchForm = document.getElementById('global-search-form');
-    const searchInput = document.getElementById('global-search');
-    const sortSelect = document.getElementById('global-sort');
-    searchForm.onsubmit = (event) => {
-        event.preventDefault();
-        uiState.searchQuery = searchInput.value;
-        uiState.sortBy = sortSelect.value;
-        uiState.currentPage = 1;
-        loadHomeSeriesPageData();
-    };
-
-    sortSelect.onchange = () => {
-        uiState.sortBy = sortSelect.value;
-        uiState.currentPage = 1;
-        loadHomeSeriesPageData();
-    };
-
-    if (uiState.homeError) {
-        grid.innerHTML = `<p class="empty-uiState">加载失败: ${uiState.homeError}</p>`;
-    }
-
-    if (uiState.homeLoading) {
-        grid.innerHTML = '<p class="empty-uiState">正在加载列表...</p>';
-    }
-
-    const totalPages = Math.max(1, Math.ceil(uiState.homeTotal / uiState.pageSize));
-    const pageSeries = uiState.homeSeries;
-
-    pageSeries.forEach((series) => {
-        const maxEpisode = Number(series.currentMaxEpisodeNo) || 0;
-        const totalEpisodes = Number(series.totalEpisodeCount) || 0;
-        const card = document.createElement('article');
-        card.className = 'poster-card';
-        card.innerHTML = `
-        <div class="poster" style="background-image:url('${series.poster}')"></div>
-        <p class="poster-title">${escapeHtml(series.name)}</p>
-        <p class="poster-meta">最大集数：${maxEpisode}<br>总集数：${totalEpisodes}<br>最后更新时间：<br>${escapeHtml(formatDateTimeZhCN(series.updatedAt))}<br>入库时间：<br>${escapeHtml(formatDateTimeZhCN(series.firstIngestedAt))}</p>
-      `;
-        card.onclick = () => {
-            history.pushState({}, '', `/${encodeURIComponent(series.name)}`);
-            uiState.selectedEpisode = null;
-            render();
-        };
-        grid.appendChild(card);
-    });
-
-    if (pageSeries.length === 0) {
-        grid.innerHTML = '<p class="empty-uiState">没有匹配的漫剧</p>';
-    }
-
-    const buildPageList = () => {
-        const pages = new Set([1, totalPages]);
-        for (let i = uiState.currentPage - 2; i <= uiState.currentPage + 2; i += 1) {
-            if (i >= 1 && i <= totalPages) pages.add(i);
-        }
-        return [...pages].sort((a, b) => a - b);
-    };
-
-    const pageItems = buildPageList();
-    const pagination = document.createElement('div');
-    pagination.className = 'pagination';
-    pagination.innerHTML = `
-    <button type="button" class="page-btn" data-page="prev" ${uiState.currentPage === 1 ? 'disabled' : ''}>上一页</button>
-    <div class="page-numbers">
-      ${pageItems.map((pageNo, idx) => {
-        const prev = pageItems[idx - 1];
-        const ellipsis = prev && pageNo - prev > 1 ? '<span class="page-ellipsis">…</span>' : '';
-        return `${ellipsis}<button type="button" class="page-number-btn ${pageNo === uiState.currentPage ? 'active' : ''}" data-page-no="${pageNo}">${pageNo}</button>`;
-    }).join('')}
-    </div>
-    <button type="button" class="page-btn" data-page="next" ${uiState.currentPage === totalPages ? 'disabled' : ''}>下一页</button>
-    <span class="page-meta">第 ${uiState.currentPage} / ${totalPages} 页(共 ${uiState.homeTotal} 个)</span>
-    <form class="page-jump-form" id="page-jump-form">
-      <label for="page-jump-input">跳转</label>
-      <input id="page-jump-input" type="number" min="1" max="${totalPages}" value="${uiState.currentPage}" />
-      <button type="submit" class="page-jump-btn">确定</button>
-    </form>
-  `;
-
-    const prevBtn = pagination.querySelector('[data-page="prev"]');
-    const nextBtn = pagination.querySelector('[data-page="next"]');
-    prevBtn.onclick = () => {
-        if (uiState.currentPage <= 1) return;
-        uiState.currentPage -= 1;
-        loadHomeSeriesPageData();
-    };
-    nextBtn.onclick = () => {
-        if (uiState.currentPage >= totalPages) return;
-        uiState.currentPage += 1;
-        loadHomeSeriesPageData();
-    };
-
-    pagination.querySelectorAll('[data-page-no]').forEach((btn) => {
-        btn.onclick = () => {
-            const pageNo = Number(btn.dataset.pageNo);
-            if (!Number.isFinite(pageNo) || pageNo === uiState.currentPage) return;
-            uiState.currentPage = pageNo;
-            loadHomeSeriesPageData();
-        };
-    });
-
-    const jumpForm = pagination.querySelector('#page-jump-form');
-    jumpForm.onsubmit = (event) => {
-        event.preventDefault();
-        const input = jumpForm.querySelector('#page-jump-input');
-        const nextPage = Number(input.value);
-        if (!Number.isFinite(nextPage)) return;
-        const safePage = Math.min(totalPages, Math.max(1, Math.floor(nextPage)));
-        if (safePage === uiState.currentPage) return;
-        uiState.currentPage = safePage;
-        loadHomeSeriesPageData();
-    };
-
-    container.querySelector('.home-page').appendChild(pagination);
 }
 
 function renderHomePage(container) {
@@ -1096,7 +910,7 @@ function renderAdminPanel(adminPanelContainer) {
         <form id="tag-rename-form" class="inline-form">
             <select name="tagName" required>
                 <option value="">选择标签</option>
-                ${availableTags.map((tagName) => `<option value="${tagName}">${tagName}</option>`).join('')}
+                ${availableTags.map((tagName) => `<option value="${escapeHtml(tagName)}">${escapeHtml(tagName)}</option>`).join('')}
             </select>
             <input name="newTagName" required placeholder="新标签名"/>
             <button type="submit">修改</button>
@@ -1107,7 +921,7 @@ function renderAdminPanel(adminPanelContainer) {
         <form id="tag-delete-form" class="inline-form">
             <select name="tagName" required>
                 <option value="">选择标签</option>
-                ${availableTags.map((tagName) => `<option value="${tagName}">${tagName}</option>`).join('')}
+                ${availableTags.map((tagName) => `<option value="${escapeHtml(tagName)}">${escapeHtml(tagName)}</option>`).join('')}
             </select>
             <button type="submit">删除</button>
         </form>
