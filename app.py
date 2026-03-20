@@ -997,11 +997,11 @@ def query_series_detail_data(title_name: str):
             SELECT title.id,
                    title.name,
                    title.cover_url                                AS poster,
-                   title.first_ingested_at                        AS firstIngestedAt,
-                   title.last_new_episode_at                      AS lastNewEpisodeAt,
-                   title.updated_at                               AS updatedAt,
-                   title.total_episode_count                      AS totalEpisodeCount,
-                   title.current_max_episode_no                   AS currentMaxEpisodeNo,
+                   title.first_ingested_at                        AS "firstIngestedAt",
+                   title.last_new_episode_at                      AS "lastNewEpisodeAt",
+                   title.updated_at                               AS "updatedAt",
+                   title.total_episode_count                      AS "totalEpisodeCount",
+                   title.current_max_episode_no                   AS "currentMaxEpisodeNo",
                    COALESCE(tag_summary.tags, ARRAY[]::text[])    AS tags,
                    COALESCE(episode_summary.episodes, '[]'::json) AS episodes
             FROM title

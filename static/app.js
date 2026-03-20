@@ -12,7 +12,12 @@
  * @param {string|number|Date} iso - 可被Date解析的时间值
  * @returns {string} 以zh-CN规则输出的24小时制时间文本
  */
-const formatDateTimeZhCN = (iso) => new Date(iso).toLocaleString('zh-CN', {hour12: false});
+const formatDateTimeZhCN = (iso) => {
+    if (!iso) return '-';
+    const parsedDate = new Date(iso);
+    if (Number.isNaN(parsedDate.getTime())) return '-';
+    return parsedDate.toLocaleString('zh-CN', {hour12: false});
+};
 
 /**
  * 全局页面状态容器
@@ -144,7 +149,8 @@ async function reloadBaseDataAndRender() {
     const activeSeriesName = getCurrentRouteSeriesName();
 
     try {
-        const [tagListResponse, titleListResponse] = await Promise.all([
+        const [, tagListResponse, titleListResponse] = await Promise.all([
+            requestJsonApiOrThrow('/api/health'),
             requestJsonApiOrThrow('/api/tags'),
             requestJsonApiOrThrow('/api/titles')
         ]);
@@ -421,11 +427,62 @@ function showFlashMessage(message) {
     uiState.flashVersion += 1;
 }
 
+function updateFlashMessageUiOnly() {
+    const contentShell = document.querySelector('.content-shell');
+    if (!contentShell) return;
+
+    const existingFlashNode = contentShell.querySelector('.flash-message');
+    if (!uiState.flashMessage) {
+        existingFlashNode?.remove();
+        return;
+    }
+
+    if (existingFlashNode) {
+        const flashTextNode = existingFlashNode.querySelector('.flash-text');
+        if (flashTextNode) {
+            flashTextNode.textContent = uiState.flashMessage;
+        }
+        return;
+    }
+
+    contentShell.insertAdjacentHTML('afterbegin', renderFlashMessageHtml());
+    bindFlashMessageEvents();
+}
+
 function hideFlashMessage() {
     uiState.flashMessage = '';
     if (uiState.flashAutoCloseTimeout) {
         clearTimeout(uiState.flashAutoCloseTimeout);
         uiState.flashAutoCloseTimeout = null;
+    }
+}
+
+function bindFlashMessageEvents() {
+    const flashCloseBtn = document.getElementById('flash-close-btn');
+    if (!uiState.flashMessage || uiState.renderedFlashVersion === uiState.flashVersion) {
+        if (flashCloseBtn) {
+            flashCloseBtn.onclick = () => {
+                hideFlashMessage();
+                updateFlashMessageUiOnly();
+            };
+        }
+        return;
+    }
+
+    if (uiState.flashAutoCloseTimeout) {
+        clearTimeout(uiState.flashAutoCloseTimeout);
+    }
+    uiState.renderedFlashVersion = uiState.flashVersion;
+    uiState.flashAutoCloseTimeout = setTimeout(() => {
+        hideFlashMessage();
+        updateFlashMessageUiOnly();
+    }, 5000);
+
+    if (flashCloseBtn) {
+        flashCloseBtn.onclick = () => {
+            hideFlashMessage();
+            updateFlashMessageUiOnly();
+        };
     }
 }
 
@@ -488,23 +545,7 @@ function render() {
         render();
     };
 
-    const flashCloseBtn = document.getElementById('flash-close-btn');
-    if (uiState.flashMessage && uiState.renderedFlashVersion !== uiState.flashVersion) {
-        if (uiState.flashAutoCloseTimeout) {
-            clearTimeout(uiState.flashAutoCloseTimeout);
-        }
-        uiState.renderedFlashVersion = uiState.flashVersion;
-        uiState.flashAutoCloseTimeout = setTimeout(() => {
-            hideFlashMessage();
-            render();
-        }, 5000);
-    }
-    if (flashCloseBtn) {
-        flashCloseBtn.onclick = () => {
-            hideFlashMessage();
-            render();
-        };
-    }
+    bindFlashMessageEvents();
 
     if (uiState.adminModalOpen) {
         document.getElementById('close-admin').onclick = () => {
@@ -1185,9 +1226,8 @@ function renderAdminPanel(adminPanelContainer) {
     <section class="action-panel ${uiState.activeTitleAdminAction === 'create' ? '' : 'hidden'}">
         <form id="title-create-form" class="stack-form">
             <input name="name" required placeholder="漫剧名"/>
-            <input name="poster" required placeholder="海报资源地址: 支持https://...或服务端本地绝对路径"/>
+            <input name="poster" placeholder="海报资源地址: 支持https://...或服务端本地绝对路径"/>
             ${renderTagMultiSelectHtml('tags', tags)}
-            <p id="title-create-tags-error" class="field-error hidden" role="alert" aria-live="polite"></p>
             <button type="submit">新增</button>
         </form>
     </section>
@@ -1199,7 +1239,7 @@ function renderAdminPanel(adminPanelContainer) {
                 ${uiState.allSeries.map((series) => `<option value="${series.name}">${series.name}</option>`).join('')}
             </select>
             <input name="newName" required placeholder="新漫剧名"/>
-            <input name="newPoster" required placeholder="新海报资源地址: 支持https://...或服务端本地绝对路径"/>
+            <input name="newPoster" placeholder="新海报资源地址: 支持https://...或服务端本地绝对路径"/>
             ${renderTagMultiSelectHtml('newTags', tags)}
             <button type="submit">修改</button>
         </form>
@@ -1234,16 +1274,6 @@ function renderAdminPanel(adminPanelContainer) {
 
         const titleCreateForm = document.getElementById('title-create-form');
         if (titleCreateForm) {
-            // 这个节点专门显示 标签至少选一个 这类错误信息
-            const tagsValidationMessageNode = titleCreateForm.querySelector('#title-create-tags-error');
-
-            // 只要标签勾选状态变化 就立即重新校验并更新提示
-            titleCreateForm.querySelectorAll('input[name="tags"]').forEach((tagCheckbox) => {
-                tagCheckbox.onchange = () => {
-                    validateMultiTagSelection(titleCreateForm, 'tags', tagsValidationMessageNode, '请至少选择一个标签');
-                };
-            });
-
             // 新增漫剧时会先提取并清洗表单输入
             // 校验通过后再把名称 海报和标签一起发给后端
             titleCreateForm.onsubmit = async (submitEvent) => {
@@ -1258,10 +1288,6 @@ function renderAdminPanel(adminPanelContainer) {
                 // 后面的 map 和 filter 再负责裁剪空白并过滤空字符串
                 const selectedTagNames = submittedFormData.getAll('tags').map((tagName) => String(tagName).trim()).filter(Boolean);
 
-                // 提交前再做一次兜底校验，防止用户未选择标签直接提交
-                if (!validateMultiTagSelection(submitEvent.target, 'tags', tagsValidationMessageNode, '请至少选择一个标签')) {
-                    return;
-                }
                 try {
                     // 后端会用这组数据创建漫剧并写入标签关联
                     const responseJson = await requestJsonApiOrThrow('/api/titles', {
@@ -1313,7 +1339,7 @@ function renderAdminPanel(adminPanelContainer) {
                     .getAll('newTags')
                     .map((tag) => String(tag).trim())
                     .filter(Boolean);
-                if (!oldName || !newName || !newPoster || newTags.length === 0) return;
+                if (!oldName || !newName) return;
 
                 try {
                     const responseJson = await requestJsonApiOrThrow(`/api/titles/${encodeURIComponent(oldName)}`, {
@@ -1379,10 +1405,9 @@ function renderAdminPanel(adminPanelContainer) {
       <section class="action-panel ${uiState.activeEpisodeAdminAction === 'batch' ? '' : 'hidden'}">
         <form id="episode-batch-form" class="stack-form">
           <input name="name" required placeholder="漫剧名" />
-          <input name="poster" required placeholder="海报资源地址: 支持https://...或服务端本地绝对路径" />
-          <input name="directoryUrl" required placeholder="视频目录资源地址: 支持https://...或服务端本地绝对路径" />
+          <input name="poster" placeholder="海报资源地址: 支持https://...或服务端本地绝对路径" />
+          <input name="directory" required placeholder="视频目录资源地址: 支持https://...或服务端本地绝对路径" />
           ${renderTagMultiSelectHtml('batchTags', collectAvailableTags())}
-          <p id="episode-batch-tags-error" class="field-error hidden" role="alert" aria-live="polite"></p>
           <p class="hint">会自动解析目录下视频链接并按文件名中的"第1集/第一集/EP01"等集号排序导入</p>
           <button type="submit">批量导入</button>
         </form>
@@ -1461,22 +1486,13 @@ function renderAdminPanel(adminPanelContainer) {
 
     const episodeBatchForm = document.getElementById('episode-batch-form');
     if (episodeBatchForm) {
-        const tagsErrorNode = episodeBatchForm.querySelector('#episode-batch-tags-error');
-        episodeBatchForm.querySelectorAll('input[name="batchTags"]').forEach((checkbox) => {
-            checkbox.onchange = () => {
-                validateMultiTagSelection(episodeBatchForm, 'batchTags', tagsErrorNode, '请至少选择一个标签');
-            };
-        });
-
         episodeBatchForm.onsubmit = async (event) => {
             event.preventDefault();
-            if (!validateMultiTagSelection(episodeBatchForm, 'batchTags', tagsErrorNode, '请至少选择一个标签')) return;
-
             const formData = new FormData(event.target);
             const payload = {
                 name: String(formData.get('name') || '').trim(),
                 poster: String(formData.get('poster') || '').trim(),
-                directoryUrl: String(formData.get('directoryUrl') || '').trim(),
+                directory: String(formData.get('directory') || '').trim(),
                 // getAll 会先取出全部 batchTags
                 // 后面的 map 和 filter 再负责裁剪空白并过滤空字符串
                 tags: formData.getAll('batchTags').map((item) => String(item).trim()).filter(Boolean)
@@ -1486,10 +1502,7 @@ function renderAdminPanel(adminPanelContainer) {
                 const result = await requestJsonApiOrThrow('/api/episodes/batch-directory', {
                     method: 'POST', body: JSON.stringify(payload)
                 });
-                const total = result.data?.total ?? 0;
-                const inserted = result.data?.inserted ?? 0;
-                const updated = result.data?.updated ?? 0;
-                showFlashMessage(getSuccessMessage(result, `批量导入成功：共 ${total} 集，新增 ${inserted} 集，更新 ${updated} 集`));
+                showFlashMessage(getSuccessMessage(result, '批量导入成功'));
                 if (getCurrentRouteSeriesName() === payload.name) {
                     uiState.selectedEpisode = 1;
                 }
