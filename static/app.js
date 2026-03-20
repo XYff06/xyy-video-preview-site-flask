@@ -1250,7 +1250,7 @@ function renderAdminPanel(adminPanelContainer) {
                 try {
                     // 后端会用这组数据创建漫剧并写入标签关联
                     const responseJson = await requestJsonApiOrThrow('/api/titles', {
-                        method: 'POST', body: JSON.stringify({name: titleName, poster: poster, tags: selectedTagNames})
+                        method: 'POST', body: JSON.stringify({titleName: titleName, titlePoster: poster, titleTags: selectedTagNames})
                     });
                     showFlashMessage(getSuccessMessage(responseJson, `漫剧[${titleName}]已创建`));
                     await reloadBaseDataAndRender();

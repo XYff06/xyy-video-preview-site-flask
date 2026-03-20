@@ -247,6 +247,20 @@ def get_required_oss_config():
     return access_key, secret_key, endpoint, region, bucket_name
 
 
+def normalize_and_validate_tag_names(raw_tag_names, db_cursor):
+    """规范化并校验标签名"""
+    tag_names = [str(tag_name).strip() for tag_name in (raw_tag_names or []) if is_valid_text(tag_name)]
+    tag_names = list(dict.fromkeys(tag_names))
+    if not tag_names:
+        return []
+    db_cursor.execute("SELECT tag_name FROM tag WHERE tag_name = ANY(%s)", (tag_names,), )
+    existing_tag_names = {row["tag_name"] for row in db_cursor.fetchall()}
+    missing_tag_names = [tag_name for tag_name in tag_names if tag_name not in existing_tag_names]
+    if missing_tag_names:
+        raise Exception(f"以下标签不存在: {'、'.join(missing_tag_names)}")
+    return tag_names
+
+
 def append_millisecond_timestamp_to_filename(path_object: Path) -> str:
     """给文件名追加毫秒时间戳，避免上传到对象存储时发生同名覆盖"""
     suffixes = "".join(path_object.suffixes)
@@ -261,7 +275,7 @@ def resolve_resource_to_url(value: str, title_id: str, local_path_kind: str = "a
     """
     把资源输入转换成可访问地址
     :param value: 资源输入
-    :param title_id: 漫剧名
+    :param title_id: 漫剧id
     :param local_path_kind: 文件类型
     :return: url/url_list
     """
@@ -340,38 +354,28 @@ def api_titles_post():
     """创建漫剧"""
     # 尝试把请求体解析成JSON，如果解析失败、请求体为空或者不是合法JSON，就用空字典兜底
     request_body = request.get_json(silent=True) or {}
-    # 校验name是否有效
-    if not is_valid_text(request_body.get("name")):
-        return build_json_response(400, message="无效name")
-    title_name = request_body["name"].strip()
-    raw_poster = str(request_body.get("poster") or "").strip()  # 如果没有poster，那么就用"暂无海报"来作为封面
-    selected_tags = [tag_name.strip() for tag_name in request_body.get("tags", []) if is_valid_text(tag_name)]
-    selected_tags = list(dict.fromkeys(selected_tags))
-    # 先插入name和selected_tags，有raw_poster再更新
+    if not is_valid_text(request_body.get("titleName")):
+        return build_json_response(400, message="无效titleName")
+    title_name = request_body["titleName"].strip()
+    title_poster = str(request_body.get("titlePoster") or "").strip()
     try:
         # 开启事务执行创建，创建成功会提交，失败会回滚
         with open_db_connection_in_transaction() as db_connection, db_connection.cursor() as db_cursor:
+            title_tags = normalize_and_validate_tag_names(request_body.get("titleTags"), db_cursor)
             # 创建一条只有name、cover_url=None的漫剧记录
             db_cursor.execute("INSERT INTO title(name, cover_url) VALUES (%s, %s) RETURNING id", (title_name, None), )
             created_title_id = db_cursor.fetchone()["id"]  # 这条记录的id
-            # title_tag
-            if selected_tags:
-                # 去tag表里查，selected_tags这些标签名里哪些是真实存在于数据库中的
-                db_cursor.execute("SELECT tag_name FROM tag WHERE tag_name = ANY(%s)", (selected_tags,), )
-                existing_tag_names = {row["tag_name"] for row in db_cursor.fetchall()}
-                missing_tag_names = [tag_name for tag_name in selected_tags if tag_name not in existing_tag_names]
-                if missing_tag_names:
-                    raise Exception(f"以下标签不存在: {'、'.join(missing_tag_names)}")
-            replace_title_tags(db_connection, created_title_id, selected_tags)
-            if raw_poster:
-                poster_url = resolve_resource_to_url(raw_poster, str(created_title_id), local_path_kind="file", )
+            if title_tags:
+                replace_title_tags(db_connection, created_title_id, title_tags)
+            if title_poster:
+                poster_url = resolve_resource_to_url(title_poster, str(created_title_id), local_path_kind="file", )
                 db_cursor.execute("UPDATE title SET cover_url = %s WHERE id = %s", (poster_url, created_title_id), )
     except UniqueViolation:
-        return build_json_response(409, message=f"<{title_name}>漫剧名称已存在")
+        return build_json_response(409, message=f"漫剧创建失败: 目标漫剧名<{title_name}>已存在")
     except Exception as e:
         return build_json_response(400, message=str(e))
     # 漫剧创建成功，返回201
-    return build_json_response(201, message=f"<{title_name}>漫剧已创建")
+    return build_json_response(201, message=f"漫剧创建成功: 目标漫剧名<{title_name}>已创建")
 
 
 @flask_app.route("/api/titles/<path:title_name>", methods=["PATCH"])
