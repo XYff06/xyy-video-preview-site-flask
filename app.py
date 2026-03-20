@@ -243,7 +243,7 @@ def get_required_oss_config():
         if not current
     ]
     if missing:
-        raise ValueError(f"缺少OSS配置: {'、'.join(missing)}")
+        raise Exception(f"缺少OSS配置: {'、'.join(missing)}")
     return access_key, secret_key, endpoint, region, bucket_name
 
 
@@ -300,7 +300,7 @@ def resolve_resource_to_url(value: str, title_id: str, local_path_kind: str = "a
             raise Exception(f"上传失败，status_code={getattr(response, 'status_code', 'unknown')}")
         return f"https://{bucket_name}.{endpoint}/{key}"
 
-    # 目录输入会递归上传所有文件，返回值会是一组可直接访问的视频地址列表
+    # 目录输入会递归上传所有文件，返回值会是一组可直接访问的地址列表
     if path_object.is_dir():
         if local_path_kind == "file":
             raise Exception("本地路径必须是文件，不能是目录")
@@ -598,7 +598,7 @@ def api_episodes_batch_directory():
                 existing_tag_names = {row["tag_name"] for row in db_cursor.fetchall()}
                 missing_tag_names = [tag_name for tag_name in selected_tags if tag_name not in existing_tag_names]
                 if missing_tag_names:
-                    raise ValueError(f"以下标签不存在: {'、'.join(missing_tag_names)}")
+                    raise Exception(f"以下标签不存在: {'、'.join(missing_tag_names)}")
 
             replace_title_tags(db_connection, title_id, selected_tags)
 
@@ -615,7 +615,7 @@ def api_episodes_batch_directory():
 
             parsed_episode_records = build_episode_records_from_directory_input(directory, title_id)
             if not parsed_episode_records:
-                raise ValueError("目录中没有识别到可解析的视频")
+                raise Exception("目录中没有识别到可解析的视频")
 
             episode_numbers = [item["episodeNo"] for item in parsed_episode_records]
             episode_urls = [item["videoUrl"] for item in parsed_episode_records]
