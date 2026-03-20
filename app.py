@@ -825,6 +825,30 @@ def build_series_order_by_sql(sort: str | None) -> str:
     return sort_map.get(sort or "", sort_map["updated_desc"])
 
 
+def convert_to_iso_datetime(value):
+    """把数据库时间值统一转换成ISO字符串"""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return value
+
+
+def serialize_series_list_record(row):
+    """把列表查询结果整理成首页卡片可直接消费的结构"""
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "poster": row["poster"],
+        "firstIngestedAt": convert_to_iso_datetime(row["firstIngestedAt"]),
+        "updatedAt": convert_to_iso_datetime(row["updatedAt"]),
+        "lastNewEpisodeAt": convert_to_iso_datetime(row["lastNewEpisodeAt"]),
+        "tags": row.get("tags") or [],
+        "totalEpisodeCount": int(row.get("totalEpisodeCount") or 0),
+        "currentMaxEpisodeNo": int(row.get("currentMaxEpisodeNo") or 0),
+    }
+
+
 def query_series_page_data(tag=None, name=None, search=None, sort=None, page=1, page_size=25):
     """
     把前端传来的筛选条件转换成SQL:
@@ -933,15 +957,6 @@ def api_series():
     return build_json_response(200, **payload)
 
 
-def convert_to_iso_datetime(value):
-    """把数据库时间值统一转换成ISO字符串"""
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value.isoformat()
-    return value
-
-
 def serialize_series_record(row):
     """把聚合后的漫剧记录转换成前端可直接渲染的结构"""
     episodes = row.get("episodes") or []
@@ -963,21 +978,6 @@ def serialize_series_record(row):
             }
             for episode in episodes
         ],
-    }
-
-
-def serialize_series_list_record(row):
-    """把列表查询结果整理成首页卡片可直接消费的结构"""
-    return {
-        "id": row["id"],
-        "name": row["name"],
-        "poster": row["poster"],
-        "firstIngestedAt": convert_to_iso_datetime(row["firstIngestedAt"]),
-        "updatedAt": convert_to_iso_datetime(row["updatedAt"]),
-        "lastNewEpisodeAt": convert_to_iso_datetime(row["lastNewEpisodeAt"]),
-        "tags": row.get("tags") or [],
-        "totalEpisodeCount": int(row.get("totalEpisodeCount") or 0),
-        "currentMaxEpisodeNo": int(row.get("currentMaxEpisodeNo") or 0),
     }
 
 
@@ -1042,12 +1042,8 @@ def api_series_detail(title_name):
     """按标题名返回单个漫剧详情"""
     payload = query_series_detail_data(unquote(title_name))
     if not payload:
-        return build_json_response(404, message="漫剧不存在")
+        return build_json_response(404, message=f"<{title_name}>漫剧不存在")
     return build_json_response(200, data=payload)
-
-
-
-
 
 
 @flask_app.route("/", defaults={"path": ""})
