@@ -875,21 +875,22 @@ body {
     border: 1px solid var(--color-border-default);
     border-radius: 8px;
     background: #fff;
-    padding: 10px;
+    padding: 8px;
     display: grid;
-    gap: 10px;
+    gap: 8px;
 }
 
 .series-picker-current {
-    min-height: 38px;
+    min-height: 32px;
     border: 1px solid var(--color-border-default);
     border-radius: 8px;
     background: #f8fafc;
-    padding: 0 10px;
+    padding: 0 8px;
     display: flex;
     align-items: center;
     color: #2f3640;
     font-weight: 600;
+    font-size: 13px;
 }
 
 .series-picker-current.is-empty {
@@ -902,9 +903,10 @@ body {
     width: 100%;
     border: 1px solid var(--color-border-default);
     border-radius: 8px;
-    height: 38px;
-    padding: 0 10px;
+    height: 32px;
+    padding: 0 8px;
     background: #fff;
+    font-size: 13px;
 }
 
 .series-picker-options {
@@ -919,10 +921,11 @@ body {
     border: 1px solid var(--color-border-default);
     border-radius: 8px;
     background: #fff;
-    padding: 8px 10px;
+    min-height: 32px;
+    padding: 6px 8px;
     cursor: pointer;
-    display: grid;
-    gap: 4px;
+    display: flex;
+    align-items: center;
     text-align: left;
 }
 
@@ -939,9 +942,10 @@ body {
 .series-picker-option-name {
     color: #2f3640;
     font-weight: 600;
+    font-size: 13px;
+    line-height: 1.2;
 }
 
-.series-picker-option-meta,
 .series-picker-empty,
 .series-picker-page-meta {
     color: var(--color-text-secondary);
@@ -963,10 +967,11 @@ body {
 .series-picker-page-btn {
     border: 1px solid var(--color-border-default);
     border-radius: 8px;
-    height: 34px;
+    height: 30px;
     background: #f8fafc;
     cursor: pointer;
-    padding: 0 12px;
+    padding: 0 10px;
+    font-size: 12px;
 }
 
 .series-picker-page-btn:disabled {

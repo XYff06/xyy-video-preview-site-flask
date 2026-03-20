@@ -415,11 +415,9 @@ function bindSeriesPickerHandlers(scope) {
             }
 
             optionsNode.innerHTML = options.map((series) => {
-                const tagText = [...(series.tags || [])].join(' / ');
                 return `
 <button type="button" class="series-picker-option ${hiddenInput.value === series.name ? 'active' : ''}" data-picker-value="${escapeHtml(series.name)}">
     <span class="series-picker-option-name">${escapeHtml(series.name)}</span>
-    <span class="series-picker-option-meta">${escapeHtml(tagText || '未设置标签')}</span>
 </button>
                 `;
             }).join('');
