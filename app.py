@@ -190,19 +190,28 @@ def api_tags_delete(tag_name):
 
 
 def replace_title_tags(db_connection: psycopg.Connection, title_id: int, tags: list[str]):
-    """用请求里的整组标签覆盖当前漫剧标签
-
-    先清空旧关联再回填新关联
-    这样可以保证数据库状态和本次请求完全一致
     """
-    # TODO: 如果后面出现这些情况，就值得改:
-    #  批量导入很多漫剧
-    #  标签更新很频繁
-    #  你想减少无意义写入
-    #  你后面给title_tag加了审计字段/触发器，删了再插会很脏
+    用请求里的整组标签覆盖当前漫剧标签:
+    1. 先把请求标签规范化成去重后的集合
+    2. 如果新旧标签集合完全一致，就直接跳过写入
+    3. 只有在确实发生变化时，才清空旧关联再回填新关联
+    """
+    normalized_tags = set(tags)
     with db_connection.cursor() as db_cursor:
+        db_cursor.execute(
+            """
+            SELECT tag.tag_name
+            FROM title_tag
+                     JOIN tag ON tag.id = title_tag.tag_id
+            WHERE title_tag.title_id = %s
+            """,
+            (title_id,),
+        )
+        current_tags = {row["tag_name"] for row in db_cursor.fetchall()}
+        if current_tags == normalized_tags:
+            return
         db_cursor.execute("DELETE FROM title_tag WHERE title_id = %s", (title_id,))
-        if not tags:
+        if not normalized_tags:
             return
         db_cursor.execute(
             """
@@ -211,22 +220,12 @@ def replace_title_tags(db_connection: psycopg.Connection, title_id: int, tags: l
             FROM tag
             WHERE tag.tag_name = ANY (%s) ON CONFLICT DO NOTHING
             """,
-            (title_id, tags),
+            (title_id, list(normalized_tags)),
         )
 
 
 def get_required_oss_config():
-    """
-    读取必填的OSS相关环境变量
-
-    Returns:
-        tuple[str, str, str, str, str]:
-            按顺序返回access_key、secret_key、endpoint、region、bucket_name
-
-    Raises:
-        Exception:
-            当任意必填OSS环境变量缺失时抛出异常
-    """
+    """读取必填的OSS相关环境变量"""
     access_key = get_normalized_environment_variable("OSS_ACCESS_KEY")
     secret_key = get_normalized_environment_variable("OSS_SECRET_KEY")
     endpoint = get_normalized_environment_variable("OSS_ENDPOINT")
@@ -252,11 +251,9 @@ def append_millisecond_timestamp_to_filename(path_object: Path) -> str:
     """给文件名追加毫秒时间戳，避免上传到对象存储时发生同名覆盖"""
     suffixes = "".join(path_object.suffixes)
     timestamp = int(time.time() * 1000)
-
     if suffixes:
         base_name = path_object.name[:-len(suffixes)]
         return f"{base_name}_{timestamp}{suffixes}"
-
     return f"{path_object.name}_{timestamp}"
 
 
