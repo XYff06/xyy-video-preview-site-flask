@@ -27,7 +27,7 @@ const formatDateTimeZhCN = (iso) => {
  */
 const uiState = {
     seriesDetailsByName: {},
-    allSeries: [], // 全量漫剧数据 这里保留完整剧集列表
+    seriesOptionCacheByName: {},
     allTags: [], // 标签全集 优先使用后端独立返回的数据
     selectedTag: null, // 首页当前选中的标签 null 表示全部
     searchQuery: '', // 首页搜索关键字
@@ -106,6 +106,14 @@ function normalizeTitleOptionRecord(titleRecord) {
     };
 }
 
+function cacheSeriesOptionRecord(titleRecord) {
+    const normalizedRecord = normalizeTitleOptionRecord(titleRecord);
+    if (normalizedRecord.name) {
+        uiState.seriesOptionCacheByName[normalizedRecord.name] = normalizedRecord;
+    }
+    return normalizedRecord;
+}
+
 function normalizeSeriesDetailRecord(seriesRecord) {
     const normalizedDetailRecord = {
         ...normalizeSeriesSummaryRecord(seriesRecord),
@@ -116,7 +124,7 @@ function normalizeSeriesDetailRecord(seriesRecord) {
 }
 
 function getSeriesSummaryByName(titleName) {
-    return uiState.allSeries.find((series) => series.name === titleName) || null;
+    return uiState.seriesOptionCacheByName[titleName] || uiState.seriesDetailsByName[titleName] || null;
 }
 
 async function loadSeriesDetailByName(titleName, forceReload = false) {
@@ -149,14 +157,13 @@ async function reloadBaseDataAndRender() {
     const activeSeriesName = getCurrentRouteSeriesName();
 
     try {
-        const [, tagListResponse, titleListResponse] = await Promise.all([
+        const [, tagListResponse] = await Promise.all([
             requestJsonApiOrThrow('/api/health'),
-            requestJsonApiOrThrow('/api/tags'),
-            requestJsonApiOrThrow('/api/titles')
+            requestJsonApiOrThrow('/api/tags')
         ]);
         uiState.allTags = tagListResponse.data;
-        uiState.allSeries = (titleListResponse.data || []).map(normalizeTitleOptionRecord);
         uiState.seriesDetailsByName = {};
+        uiState.seriesOptionCacheByName = {};
         uiState.loading = false;
         uiState.error = null;
     } catch (error) {
@@ -331,6 +338,151 @@ async function getSeriesEpisodeOptions(titleName) {
     const matchedSeriesDetail = await loadSeriesDetailByName(titleName);
     if (!matchedSeriesDetail) return [];
     return matchedSeriesDetail.episodes;
+}
+
+async function fetchSeriesOptionsPage(search = '', page = 1, pageSize = 10) {
+    const params = new URLSearchParams();
+    params.set('page', String(page));
+    params.set('pageSize', String(pageSize));
+    if (String(search || '').trim()) {
+        params.set('search', String(search).trim());
+    }
+
+    const payload = await requestJsonApiOrThrow(`/api/titles?${params.toString()}`);
+    return {
+        options: (payload.data || []).map(cacheSeriesOptionRecord),
+        pagination: payload.pagination || {page, pageSize, total: 0, totalPages: 1}
+    };
+}
+
+function renderSeriesPickerHtml(fieldName, placeholderText, selectedValue = '') {
+    const safeSelectedValue = escapeHtml(selectedValue);
+    return `
+<section class="series-picker" data-series-picker data-field-name="${escapeHtml(fieldName)}" data-placeholder="${escapeHtml(placeholderText)}" data-value="${safeSelectedValue}">
+    <input type="hidden" name="${escapeHtml(fieldName)}" value="${safeSelectedValue}"/>
+    <div class="series-picker-current" data-picker-current>${safeSelectedValue || escapeHtml(placeholderText)}</div>
+    <input type="search" class="series-picker-search" data-picker-search placeholder="搜索漫剧"/>
+    <div class="series-picker-options" data-picker-options>
+        <p class="series-picker-empty">正在加载...</p>
+    </div>
+    <div class="series-picker-pagination">
+        <button type="button" class="series-picker-page-btn" data-picker-prev>上一页</button>
+        <span class="series-picker-page-meta" data-picker-meta>第 1 / 1 页</span>
+        <button type="button" class="series-picker-page-btn" data-picker-next>下一页</button>
+    </div>
+</section>
+    `;
+}
+
+function bindSeriesPickerHandlers(scope) {
+    scope.querySelectorAll('[data-series-picker]').forEach((pickerRoot) => {
+        if (pickerRoot.dataset.bound === '1') return;
+        pickerRoot.dataset.bound = '1';
+
+        const hiddenInput = pickerRoot.querySelector('input[type="hidden"]');
+        const currentNode = pickerRoot.querySelector('[data-picker-current]');
+        const searchInput = pickerRoot.querySelector('[data-picker-search]');
+        const optionsNode = pickerRoot.querySelector('[data-picker-options]');
+        const metaNode = pickerRoot.querySelector('[data-picker-meta]');
+        const prevButton = pickerRoot.querySelector('[data-picker-prev]');
+        const nextButton = pickerRoot.querySelector('[data-picker-next]');
+        const placeholderText = pickerRoot.dataset.placeholder || '选择漫剧';
+        const pageSize = 10;
+        const pickerState = {
+            search: '',
+            page: 1,
+            totalPages: 1,
+            requestId: 0
+        };
+
+        const updateCurrentLabel = () => {
+            currentNode.textContent = hiddenInput.value || placeholderText;
+            currentNode.classList.toggle('is-empty', !hiddenInput.value);
+        };
+
+        const applySelection = (selectedName) => {
+            if (hiddenInput.value === selectedName) return;
+            hiddenInput.value = selectedName;
+            pickerRoot.dataset.value = selectedName;
+            updateCurrentLabel();
+            hiddenInput.dispatchEvent(new Event('change', {bubbles: true}));
+        };
+
+        const renderOptions = (options) => {
+            if (!options.length) {
+                optionsNode.innerHTML = '<p class="series-picker-empty">当前条件下没有漫剧</p>';
+                return;
+            }
+
+            optionsNode.innerHTML = options.map((series) => {
+                const tagText = [...(series.tags || [])].join(' / ');
+                return `
+<button type="button" class="series-picker-option ${hiddenInput.value === series.name ? 'active' : ''}" data-picker-value="${escapeHtml(series.name)}">
+    <span class="series-picker-option-name">${escapeHtml(series.name)}</span>
+    <span class="series-picker-option-meta">${escapeHtml(tagText || '未设置标签')}</span>
+</button>
+                `;
+            }).join('');
+
+            optionsNode.querySelectorAll('[data-picker-value]').forEach((optionButton) => {
+                optionButton.onclick = () => {
+                    applySelection(optionButton.dataset.pickerValue || '');
+                    optionsNode.querySelectorAll('[data-picker-value]').forEach((button) => {
+                        button.classList.toggle('active', button === optionButton);
+                    });
+                };
+            });
+        };
+
+        const loadOptions = async () => {
+            const currentRequestId = ++pickerState.requestId;
+            optionsNode.innerHTML = '<p class="series-picker-empty">正在加载...</p>';
+            prevButton.disabled = true;
+            nextButton.disabled = true;
+
+            try {
+                const payload = await fetchSeriesOptionsPage(pickerState.search, pickerState.page, pageSize);
+                if (currentRequestId !== pickerState.requestId) return;
+                pickerState.page = payload.pagination.page || 1;
+                pickerState.totalPages = payload.pagination.totalPages || 1;
+                renderOptions(payload.options);
+                metaNode.textContent = `第 ${pickerState.page} / ${pickerState.totalPages} 页`;
+                prevButton.disabled = pickerState.page <= 1;
+                nextButton.disabled = pickerState.page >= pickerState.totalPages;
+            } catch (error) {
+                if (currentRequestId !== pickerState.requestId) return;
+                optionsNode.innerHTML = `<p class="series-picker-empty">${escapeHtml(error.message)}</p>`;
+                metaNode.textContent = '加载失败';
+                prevButton.disabled = true;
+                nextButton.disabled = true;
+            }
+        };
+
+        let searchDebounceTimer = null;
+        searchInput.addEventListener('input', () => {
+            pickerState.search = searchInput.value.trim();
+            pickerState.page = 1;
+            clearTimeout(searchDebounceTimer);
+            searchDebounceTimer = setTimeout(() => {
+                loadOptions();
+            }, 250);
+        });
+
+        prevButton.onclick = () => {
+            if (pickerState.page <= 1) return;
+            pickerState.page -= 1;
+            loadOptions();
+        };
+
+        nextButton.onclick = () => {
+            if (pickerState.page >= pickerState.totalPages) return;
+            pickerState.page += 1;
+            loadOptions();
+        };
+
+        updateCurrentLabel();
+        loadOptions();
+    });
 }
 
 /**
@@ -1048,10 +1200,7 @@ function renderAdminPanel(adminPanelContainer) {
 
     <section class="action-panel ${uiState.activeTitleAdminAction === 'rename' ? '' : 'hidden'}">
         <form id="title-rename-form" class="stack-form">
-            <select name="name" required>
-                <option value="">选择漫剧</option>
-                ${uiState.allSeries.map((series) => `<option value="${series.name}">${series.name}</option>`).join('')}
-            </select>
+            ${renderSeriesPickerHtml('name', '选择漫剧')}
             <input name="newName" required placeholder="新漫剧名"/>
             <input name="newPoster" placeholder="新海报资源地址: 支持https://...或服务端本地绝对路径"/>
             ${renderTagMultiSelectHtml('newTags', tags)}
@@ -1060,11 +1209,8 @@ function renderAdminPanel(adminPanelContainer) {
     </section>
 
     <section class="action-panel ${uiState.activeTitleAdminAction === 'delete' ? '' : 'hidden'}">
-        <form id="title-delete-form" class="inline-form">
-            <select name="name" required>
-                <option value="">选择漫剧</option>
-                ${uiState.allSeries.map((series) => `<option value="${series.name}">${series.name}</option>`).join('')}
-            </select>
+        <form id="title-delete-form" class="stack-form">
+            ${renderSeriesPickerHtml('name', '选择漫剧')}
             <button type="submit">删除</button>
         </form>
     </section>
@@ -1085,6 +1231,7 @@ function renderAdminPanel(adminPanelContainer) {
         // 绑定多选下拉框的 summary 交互
         // 这样展开收起和选中后的文案才能保持同步
         bindMultiSelectSummaryHandlers(adminPanelContainer);
+        bindSeriesPickerHandlers(adminPanelContainer);
 
         const titleCreateForm = document.getElementById('title-create-form');
         if (titleCreateForm) {
@@ -1122,10 +1269,26 @@ function renderAdminPanel(adminPanelContainer) {
             const newNameInput = titleRenameForm.elements.namedItem('newName');
             const newPosterInput = titleRenameForm.elements.namedItem('newPoster');
 
-            const fillTitleEditFields = (titleName) => {
+            const fillTitleEditFields = async (titleName) => {
                 // 选中某个漫剧后
                 // 把它当前的名称 海报和标签回填到编辑表单
-                const targetSeries = getSeriesSummaryByName(titleName);
+                if (!titleName) {
+                    newNameInput.value = '';
+                    newPosterInput.value = '';
+                    titleRenameForm.querySelectorAll('input[name="newTags"]').forEach((checkbox) => {
+                        checkbox.checked = false;
+                    });
+                    bindMultiSelectSummaryHandlers(titleRenameForm);
+                    return;
+                }
+
+                let targetSeries = getSeriesSummaryByName(titleName);
+                if (!targetSeries) {
+                    const seriesDetail = await loadSeriesDetailByName(titleName);
+                    if (seriesDetail) {
+                        targetSeries = cacheSeriesOptionRecord(seriesDetail);
+                    }
+                }
                 if (!targetSeries) return;
                 newNameInput.value = targetSeries.name;
                 newPosterInput.value = targetSeries.poster;
@@ -1135,8 +1298,8 @@ function renderAdminPanel(adminPanelContainer) {
                 bindMultiSelectSummaryHandlers(titleRenameForm);
             };
 
-            titleSelect.onchange = () => {
-                fillTitleEditFields(titleSelect.value);
+            titleSelect.onchange = async () => {
+                await fillTitleEditFields(titleSelect.value);
             };
 
             fillTitleEditFields(titleSelect.value);
@@ -1206,10 +1369,7 @@ function renderAdminPanel(adminPanelContainer) {
 
       <section class="action-panel ${uiState.activeEpisodeAdminAction === 'create' ? '' : 'hidden'}">
         <form id="episode-create-form" class="stack-form">
-          <select name="titleName" required>
-            <option value="">选择漫剧</option>
-            ${uiState.allSeries.map((series) => `<option value="${series.name}">${series.name}</option>`).join('')}
-          </select>
+          ${renderSeriesPickerHtml('titleName', '选择漫剧')}
           <input type="number" min="1" name="episodeNo" required placeholder="集号" />
           <input name="videoUrl" required placeholder="播放资源地址: 支持https://...或服务端本地绝对路径" />
           <button type="submit">新增</button>
@@ -1229,10 +1389,7 @@ function renderAdminPanel(adminPanelContainer) {
 
       <section class="action-panel ${uiState.activeEpisodeAdminAction === 'rename' ? '' : 'hidden'}">
         <form id="episode-update-form" class="stack-form">
-          <select name="titleName" required>
-            <option value="">选择漫剧</option>
-            ${uiState.allSeries.map((series) => `<option value="${series.name}">${series.name}</option>`).join('')}
-          </select>
+          ${renderSeriesPickerHtml('titleName', '选择漫剧')}
           <select name="episodeNo" required>
             <option value="">选择集号</option>
           </select>
@@ -1243,11 +1400,8 @@ function renderAdminPanel(adminPanelContainer) {
       </section>
 
       <section class="action-panel ${uiState.activeEpisodeAdminAction === 'delete' ? '' : 'hidden'}">
-        <form id="episode-delete-form" class="inline-form">
-          <select name="titleName" required>
-            <option value="">选择漫剧</option>
-            ${uiState.allSeries.map((series) => `<option value="${series.name}">${series.name}</option>`).join('')}
-          </select>
+        <form id="episode-delete-form" class="stack-form">
+          ${renderSeriesPickerHtml('titleName', '选择漫剧')}
           <select name="episodeNo" required>
             <option value="">选择集号</option>
           </select>
@@ -1267,6 +1421,7 @@ function renderAdminPanel(adminPanelContainer) {
     });
 
     bindMultiSelectSummaryHandlers(adminPanelContainer);
+    bindSeriesPickerHandlers(adminPanelContainer);
 
     const episodeCreateForm = document.getElementById('episode-create-form');
     if (episodeCreateForm) {

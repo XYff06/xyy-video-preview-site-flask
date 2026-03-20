@@ -870,6 +870,110 @@ body {
     color: var(--color-text-secondary);
 }
 
+.series-picker {
+    width: 100%;
+    border: 1px solid var(--color-border-default);
+    border-radius: 8px;
+    background: #fff;
+    padding: 10px;
+    display: grid;
+    gap: 10px;
+}
+
+.series-picker-current {
+    min-height: 38px;
+    border: 1px solid var(--color-border-default);
+    border-radius: 8px;
+    background: #f8fafc;
+    padding: 0 10px;
+    display: flex;
+    align-items: center;
+    color: #2f3640;
+    font-weight: 600;
+}
+
+.series-picker-current.is-empty {
+    color: var(--color-text-secondary);
+    font-weight: 400;
+}
+
+.stack-form .series-picker-search,
+.inline-form .series-picker-search {
+    width: 100%;
+    border: 1px solid var(--color-border-default);
+    border-radius: 8px;
+    height: 38px;
+    padding: 0 10px;
+    background: #fff;
+}
+
+.series-picker-options {
+    max-height: 220px;
+    overflow: auto;
+    display: grid;
+    gap: 6px;
+}
+
+.series-picker-option {
+    width: 100%;
+    border: 1px solid var(--color-border-default);
+    border-radius: 8px;
+    background: #fff;
+    padding: 8px 10px;
+    cursor: pointer;
+    display: grid;
+    gap: 4px;
+    text-align: left;
+}
+
+.series-picker-option:hover {
+    border-color: var(--color-accent-primary);
+    background: #f8fbff;
+}
+
+.series-picker-option.active {
+    border-color: var(--color-accent-primary);
+    background: #edf5ff;
+}
+
+.series-picker-option-name {
+    color: #2f3640;
+    font-weight: 600;
+}
+
+.series-picker-option-meta,
+.series-picker-empty,
+.series-picker-page-meta {
+    color: var(--color-text-secondary);
+    font-size: 12px;
+}
+
+.series-picker-empty {
+    margin: 0;
+    padding: 8px 2px;
+}
+
+.series-picker-pagination {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.series-picker-page-btn {
+    border: 1px solid var(--color-border-default);
+    border-radius: 8px;
+    height: 34px;
+    background: #f8fafc;
+    cursor: pointer;
+    padding: 0 12px;
+}
+
+.series-picker-page-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+}
+
 .inline-form button, .stack-form button {
     border: 1px solid var(--color-border-default);
     border-radius: 8px;
