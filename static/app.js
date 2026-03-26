@@ -1460,8 +1460,8 @@ function renderAdminPanel(adminPanelContainer) {
             const formData = new FormData(event.target);
             const payload = {
                 titleName: String(formData.get('titleName') || '').trim(),
-                episodeNo: Number(formData.get('episodeNo')),
-                videoUrl: String(formData.get('videoUrl') || '').trim()
+                titleEpisodeNo: Number(formData.get('episodeNo')),
+                titleEpisodeVideo: String(formData.get('videoUrl') || '').trim()
             };
 
             try {
@@ -1470,7 +1470,7 @@ function renderAdminPanel(adminPanelContainer) {
                     body: JSON.stringify(payload)
                 });
                 if (getCurrentRouteSeriesName() === payload.titleName) {
-                    uiState.selectedEpisode = payload.episodeNo;
+                    uiState.selectedEpisode = payload.titleEpisodeNo;
                 }
                 showFlashMessage(getSuccessMessage(responseJson, '剧集新增成功'));
                 await reloadBaseDataAndRender();
