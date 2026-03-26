@@ -361,7 +361,7 @@ def api_titles_post():
     try:
         # 开启事务执行创建，创建成功会提交，失败会回滚
         with open_db_connection_in_transaction() as db_connection, db_connection.cursor() as db_cursor:
-            title_tags = normalize_and_validate_tag_names(request_body.get("titleTags"), db_cursor)
+            title_tags = normalize_and_validate_tag_names(request_body.get("titleTags", []), db_cursor)
             # 创建一条只有name、cover_url=None的漫剧记录
             db_cursor.execute("INSERT INTO title(name, cover_url) VALUES (%s, %s) RETURNING id", (title_name, None), )
             created_title_id = db_cursor.fetchone()["id"]  # 这条记录的id
@@ -381,43 +381,48 @@ def api_titles_post():
 @flask_app.route("/api/titles/<path:title_name>", methods=["PATCH"])
 def api_titles_patch(title_name):
     """修改漫剧信息"""
-    # 尝试把请求体解析成JSON，如果解析失败、请求体为空或者不是合法JSON，就用空字典兜底
     request_body = request.get_json(silent=True) or {}
-    # 校验newName是否有效
-    if not is_valid_text(request_body.get("newName")):
-        return build_json_response(400, message="无效newName")
-    new_title_name = request_body["newName"].strip()
-    new_raw_poster = str(request_body.get("poster") or "").strip()  # 如果没有poster，那么就用"暂无海报"来作为封面
-    new_selected_tags = [tag_name.strip() for tag_name in request_body.get("tags", []) if is_valid_text(tag_name)]
-    new_selected_tags = list(dict.fromkeys(new_selected_tags))
+    if not is_valid_text(request_body.get("newTitleName")):
+        return build_json_response(400, message="无效newTitleName")
+    new_title_name = request_body["newTitleName"].strip()
+    new_title_poster = str(request_body.get("newTitlePoster") or "").strip()
+    change_messages = []
     try:
-        # 开启事务执行创建，创建成功会提交，失败会回滚
         with open_db_connection_in_transaction() as db_connection, db_connection.cursor() as db_cursor:
-            db_cursor.execute("SELECT id FROM title WHERE name = %s", (title_name,))
-            row = db_cursor.fetchone()
-            if not row:
-                return build_json_response(404, message=f"<{title_name}>漫剧不存在")
-            title_id = row["id"]
-            # title_tag
-            if new_selected_tags:
-                # 去tag表里查，new_selected_tags这些标签名里哪些是真实存在于数据库中的
-                db_cursor.execute("SELECT tag_name FROM tag WHERE tag_name = ANY(%s)", (new_selected_tags,), )
-                existing_tag_names = {row["tag_name"] for row in db_cursor.fetchall()}
-                missing_tag_names = [tag_name for tag_name in new_selected_tags if tag_name not in existing_tag_names]
-                if missing_tag_names:
-                    raise Exception(f"以下标签不存在: {'、'.join(missing_tag_names)}")
-            replace_title_tags(db_connection, title_id, new_selected_tags)
-            if new_raw_poster:
-                poster_url = resolve_resource_to_url(new_raw_poster, str(title_id), local_path_kind="file")
-                db_cursor.execute("UPDATE title SET name = %s, cover_url = %s WHERE id = %s", (new_title_name, poster_url, title_id), )
+            db_cursor.execute("SELECT id, name, cover_url FROM title WHERE name = %s", (title_name,), )
+            title_row = db_cursor.fetchone()
+            if not title_row:
+                return build_json_response(404, message=f"修改漫剧信息失败: 漫剧<{title_name}>不存在")
+            title_id = title_row["id"]
+            current_title_name = title_row["name"]
+            current_title_cover_url = title_row["cover_url"]
+            title_tags = normalize_and_validate_tag_names(request_body.get("titleTags", []), db_cursor)
+            replace_title_tags(db_connection, title_id, title_tags)
+            update_fields = []
+            update_params = []
+
+            if new_title_name != current_title_name:
+                update_fields.append("name = %s")
+                update_params.append(new_title_name)
+                change_messages.append(f"原漫剧名: <{current_title_name}>，新漫剧名: <{new_title_name}>，")
+
+            if not new_title_poster:
+                target_title_cover_url = None
             else:
-                db_cursor.execute("UPDATE title SET name = %s WHERE id = %s", (new_title_name, title_id), )
+                target_title_cover_url = resolve_resource_to_url(new_title_poster, str(title_id), local_path_kind="file")
+            if target_title_cover_url != current_title_cover_url:
+                update_fields.append("cover_url = %s")
+                update_params.append(target_title_cover_url)
+                change_messages.append(f"原漫剧海报资源地址: <{current_title_cover_url}>，新漫剧海报资源地址: <{target_title_cover_url}>，")
+
+            if update_fields:
+                update_params.append(title_id)
+                db_cursor.execute(f"UPDATE title SET {', '.join(update_fields)} WHERE id = %s", tuple(update_params), )
     except UniqueViolation:
-        return build_json_response(409, message=f"<{title_name}>信息修改失败，错误: <{new_title_name}>漫剧名称已存在")
+        return build_json_response(409, message=f"漫剧信息修改失败: 目标漫剧名<{new_title_name}>已存在")
     except Exception as e:
         return build_json_response(400, message=str(e))
-    # 漫剧信息修改成功，返回200
-    return build_json_response(200, message=f"<{title_name}>漫剧信息修改成功，新漫剧名: <{new_title_name}>")
+    return build_json_response(200, message=f"漫剧信息修改成功!!!{"".join(change_messages)}当前漫剧绑定标签: <{"、".join(title_tags) if title_tags else "无"}>")
 
 
 @flask_app.route("/api/titles/<path:title_name>", methods=["DELETE"])

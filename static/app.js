@@ -1318,7 +1318,12 @@ function renderAdminPanel(adminPanelContainer) {
 
                 try {
                     const responseJson = await requestJsonApiOrThrow(`/api/titles/${encodeURIComponent(oldName)}`, {
-                        method: 'PATCH', body: JSON.stringify({newName, poster: newPoster, tags: newTags})
+                        method: 'PATCH',
+                        body: JSON.stringify({
+                            newTitleName: newName,
+                            newTitlePoster: newPoster,
+                            titleTags: newTags
+                        })
                     });
                     showFlashMessage(getSuccessMessage(responseJson, '漫剧信息修改成功'));
                     if (getCurrentRouteSeriesName() === oldName) history.replaceState({}, '', `/${encodeURIComponent(newName)}`);
