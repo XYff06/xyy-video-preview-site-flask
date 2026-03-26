@@ -436,6 +436,138 @@ def api_titles_delete(title_name):
     return build_json_response(200, message=f"漫剧删除成功: 目标漫剧名<{title_name}>已删除")
 
 
+@flask_app.route("/api/episodes", methods=["POST"])
+def api_episodes_post():
+    """新增剧集"""
+    # 尝试把请求体解析成JSON，如果解析失败、请求体为空或者不是合法JSON，就用空字典兜底
+    request_body = request.get_json(silent=True) or {}
+    if not is_valid_text(request_body.get("titleName")):
+        return build_json_response(400, message="无效titleName")
+    title_name = request_body["titleName"].strip()
+    try:
+        title_episode_no = int(request_body.get("titleEpisodeNo"))
+    except Exception:
+        return build_json_response(400, message="无效titleEpisodeNo")
+    if title_episode_no <= 0:
+        return build_json_response(400, message="集号必须大于0")
+    if not is_valid_text(request_body.get("titleEpisodeVideo")):
+        return build_json_response(400, message="无效titleEpisodeVideo")
+    title_episode_video = request_body.get("titleEpisodeVideo").strip()
+
+    with open_db_connection_in_transaction() as db_connection, db_connection.cursor() as db_cursor:
+        db_cursor.execute("SELECT id FROM title WHERE name = %s", (title_name,))
+        title_row = db_cursor.fetchone()
+        if not title_row:
+            return build_json_response(404, message=f"漫剧新增剧集失败: 漫剧<{title_name}>不存在")
+        title_id = title_row["id"]
+
+        try:
+            title_episode_video_url = resolve_resource_to_url(title_episode_video, str(title_id), local_path_kind="file", )
+        except Exception as e:
+            return build_json_response(400, message=str(e))
+        try:
+            db_cursor.execute("INSERT INTO episode(title_id, episode_no, episode_url) VALUES (%s, %s, %s)", (title_id, title_episode_no, title_episode_video_url))
+        except UniqueViolation:
+            return build_json_response(409, message=f"漫剧<{title_name}>新增剧集失败: 目标集号<{title_episode_no}>已存在")
+    return build_json_response(201, message=f"漫剧<{title_name}>新增剧集成功: 目标集号<{title_episode_no}>已创建，视频url: <{title_episode_video_url}>")
+
+
+@flask_app.route("/api/episodes", methods=["PATCH"])
+def api_episodes_patch():
+    """修改剧集信息"""
+    # 尝试把请求体解析成JSON，如果解析失败、请求体为空或者不是合法JSON，就用空字典兜底
+    request_body = request.get_json(silent=True) or {}
+    if not is_valid_text(request_body.get("titleName")):
+        return build_json_response(400, message="无效titleName")
+    title_name = request_body["titleName"].strip()
+    if not is_valid_text(request_body.get("newTitleEpisodeVideo")):
+        return build_json_response(400, message="无效newTitleEpisodeVideo")
+    new_title_episode_video = request_body.get("newTitleEpisodeVideo").strip()
+    try:
+        title_episode_no = int(request_body.get("titleEpisodeNo"))
+    except Exception:
+        return build_json_response(400, message="无效titleEpisodeNo")
+    if title_episode_no <= 0:
+        return build_json_response(400, message="原集号必须大于0")
+    try:
+        new_title_episode_no = int(request_body.get("newTitleEpisodeNo"))
+    except Exception:
+        return build_json_response(400, message="无效newTitleEpisodeNo")
+    if new_title_episode_no <= 0:
+        return build_json_response(400, message="新集号必须大于0")
+    change_messages = []
+
+    try:
+        with open_db_connection_in_transaction() as db_connection, db_connection.cursor() as db_cursor:
+            db_cursor.execute("SELECT id FROM title WHERE name = %s", (title_name,))
+            title_row = db_cursor.fetchone()
+            if not title_row:
+                return build_json_response(404, message=f"剧集信息修改失败: 漫剧<{title_name}>不存在")
+            title_id = title_row["id"]
+
+            db_cursor.execute("SELECT id, episode_no, episode_url FROM episode WHERE title_id = %s AND episode_no = %s", (title_id, title_episode_no), )
+            episode_row = db_cursor.fetchone()
+            if not episode_row:
+                return build_json_response(404, message=f"漫剧<{title_name}>剧集信息修改失败: 原集号<{title_episode_no}>不存在")
+
+            current_title_episode_no = episode_row["episode_no"]
+            current_title_episode_video_url = episode_row["episode_url"]
+
+            update_fields = []
+            update_params = []
+
+            if new_title_episode_no != current_title_episode_no:
+                update_fields.append("episode_no = %s")
+                update_params.append(new_title_episode_no)
+                change_messages.append(f"原剧集集号: <{current_title_episode_no}>，新剧集集号: <{new_title_episode_no}>")
+            target_title_episode_video_url = resolve_resource_to_url(new_title_episode_video, str(title_id), local_path_kind="file", )
+            if target_title_episode_video_url != current_title_episode_video_url:
+                update_fields.append("episode_url = %s")
+                update_params.append(target_title_episode_video_url)
+                change_messages.append(f"原剧集视频资源地址: <{current_title_episode_video_url}>，新剧集视频资源地址: <{target_title_episode_video_url}>")
+
+            if update_fields:
+                update_params.append(episode_row["id"])
+                db_cursor.execute(f"UPDATE episode SET {', '.join(update_fields)} WHERE id = %s", tuple(update_params), )
+
+    except UniqueViolation:
+        return build_json_response(409, message=f"漫剧<{title_name}>剧集信息修改失败: 目标集号<{new_title_episode_no}>已存在", )
+    except Exception as e:
+        return build_json_response(400, message=str(e))
+    return build_json_response(200, message=f"漫剧<{title_name}>剧集信息修改成功!!!{"，".join(change_messages)}", )
+
+
+@flask_app.route("/api/episodes", methods=["DELETE"])
+def api_episodes_delete():
+    """删除剧集"""
+    # 尝试把请求体解析成JSON，如果解析失败、请求体为空或者不是合法JSON，就用空字典兜底
+    request_body = request.get_json(silent=True) or {}
+    if not is_valid_text(request_body.get("titleName")):
+        return build_json_response(400, message="无效titleName")
+    title_name = request_body["titleName"].strip()
+    try:
+        title_episode_no = int(request_body.get("titleEpisodeNo"))
+    except Exception:
+        return build_json_response(400, message="无效titleEpisodeNo")
+    if title_episode_no <= 0:
+        return build_json_response(400, message="集号必须大于0")
+    with open_db_connection_in_transaction() as db_connection, db_connection.cursor() as db_cursor:
+        db_cursor.execute(
+            """
+            DELETE
+            FROM episode USING title
+            WHERE episode.title_id = title.id
+              AND title.name = %s
+              AND episode.episode_no = %s
+            """,
+            (title_name, title_episode_no),
+        )
+        if db_cursor.rowcount == 0:
+            return build_json_response(404, message=f"漫剧<{title_name}>剧集删除失败: 目标集号<{title_episode_no}>不存在", )
+
+    return build_json_response(200, message=f"漫剧<{title_name}>剧集删除成功: 目标集号<{title_episode_no}>已删除", )
+
+
 def extract_file_urls_from_directory_html(html: str, directory_url: str):
     """从目录HTML里提取文件链接候选列表并转成绝对URL"""
     href_matches = re.findall(r"href\s*=\s*(['\"])(.*?)\1", str(html or ""), re.I | re.S)
@@ -645,138 +777,6 @@ def api_episodes_batch_directory():
         201 if created_title else 200,
         message=f"批量导入完成，共识别{len(parsed_episode_records)}集，新增{upsert_stats["inserted"]}集，更新{upsert_stats["updated"]}集",
     )
-
-
-@flask_app.route("/api/episodes", methods=["POST"])
-def api_episodes_post():
-    """新增剧集"""
-    # 尝试把请求体解析成JSON，如果解析失败、请求体为空或者不是合法JSON，就用空字典兜底
-    request_body = request.get_json(silent=True) or {}
-    if not is_valid_text(request_body.get("titleName")):
-        return build_json_response(400, message="无效titleName")
-    title_name = request_body["titleName"].strip()
-    try:
-        title_episode_no = int(request_body.get("titleEpisodeNo"))
-    except Exception:
-        return build_json_response(400, message="无效titleEpisodeNo")
-    if title_episode_no <= 0:
-        return build_json_response(400, message="集号必须大于0")
-    if not is_valid_text(request_body.get("titleEpisodeVideo")):
-        return build_json_response(400, message="无效titleEpisodeVideo")
-    title_episode_video = request_body.get("titleEpisodeVideo").strip()
-
-    with open_db_connection_in_transaction() as db_connection, db_connection.cursor() as db_cursor:
-        db_cursor.execute("SELECT id FROM title WHERE name = %s", (title_name,))
-        title_row = db_cursor.fetchone()
-        if not title_row:
-            return build_json_response(404, message=f"漫剧新增剧集失败: 漫剧<{title_name}>不存在")
-        title_id = title_row["id"]
-
-        try:
-            title_episode_video_url = resolve_resource_to_url(title_episode_video, str(title_id), local_path_kind="file", )
-        except Exception as e:
-            return build_json_response(400, message=str(e))
-        try:
-            db_cursor.execute("INSERT INTO episode(title_id, episode_no, episode_url) VALUES (%s, %s, %s)", (title_id, title_episode_no, title_episode_video_url))
-        except UniqueViolation:
-            return build_json_response(409, message=f"漫剧<{title_name}>新增剧集失败: 目标集号<{title_episode_no}>已存在")
-    return build_json_response(201, message=f"漫剧<{title_name}>新增剧集成功: 目标集号<{title_episode_no}>已创建，视频url: <{title_episode_video_url}>")
-
-
-@flask_app.route("/api/episodes", methods=["PATCH"])
-def api_episodes_patch():
-    """修改剧集信息"""
-    # 尝试把请求体解析成JSON，如果解析失败、请求体为空或者不是合法JSON，就用空字典兜底
-    request_body = request.get_json(silent=True) or {}
-    if not is_valid_text(request_body.get("titleName")):
-        return build_json_response(400, message="无效titleName")
-    title_name = request_body["titleName"].strip()
-    if not is_valid_text(request_body.get("newTitleEpisodeVideo")):
-        return build_json_response(400, message="无效newTitleEpisodeVideo")
-    new_title_episode_video = request_body.get("newTitleEpisodeVideo").strip()
-    try:
-        title_episode_no = int(request_body.get("titleEpisodeNo"))
-    except Exception:
-        return build_json_response(400, message="无效titleEpisodeNo")
-    if title_episode_no <= 0:
-        return build_json_response(400, message="原集号必须大于0")
-    try:
-        new_title_episode_no = int(request_body.get("newTitleEpisodeNo"))
-    except Exception:
-        return build_json_response(400, message="无效newTitleEpisodeNo")
-    if new_title_episode_no <= 0:
-        return build_json_response(400, message="新集号必须大于0")
-    change_messages = []
-
-    try:
-        with open_db_connection_in_transaction() as db_connection, db_connection.cursor() as db_cursor:
-            db_cursor.execute("SELECT id FROM title WHERE name = %s", (title_name,))
-            title_row = db_cursor.fetchone()
-            if not title_row:
-                return build_json_response(404, message=f"剧集信息修改失败: 漫剧<{title_name}>不存在")
-            title_id = title_row["id"]
-
-            db_cursor.execute("SELECT id, episode_no, episode_url FROM episode WHERE title_id = %s AND episode_no = %s", (title_id, title_episode_no), )
-            episode_row = db_cursor.fetchone()
-            if not episode_row:
-                return build_json_response(404, message=f"漫剧<{title_name}>剧集信息修改失败: 原集号<{title_episode_no}>不存在")
-
-            current_title_episode_no = episode_row["episode_no"]
-            current_title_episode_video_url = episode_row["episode_url"]
-
-            update_fields = []
-            update_params = []
-
-            if new_title_episode_no != current_title_episode_no:
-                update_fields.append("episode_no = %s")
-                update_params.append(new_title_episode_no)
-                change_messages.append(f"原剧集集号: <{current_title_episode_no}>，新剧集集号: <{new_title_episode_no}>")
-            target_title_episode_video_url = resolve_resource_to_url(new_title_episode_video, str(title_id), local_path_kind="file", )
-            if target_title_episode_video_url != current_title_episode_video_url:
-                update_fields.append("episode_url = %s")
-                update_params.append(target_title_episode_video_url)
-                change_messages.append(f"原剧集视频资源地址: <{current_title_episode_video_url}>，新剧集视频资源地址: <{target_title_episode_video_url}>")
-
-            if update_fields:
-                update_params.append(episode_row["id"])
-                db_cursor.execute(f"UPDATE episode SET {', '.join(update_fields)} WHERE id = %s", tuple(update_params), )
-
-    except UniqueViolation:
-        return build_json_response(409, message=f"漫剧<{title_name}>剧集信息修改失败: 目标集号<{new_title_episode_no}>已存在", )
-    except Exception as e:
-        return build_json_response(400, message=str(e))
-    return build_json_response(200, message=f"漫剧<{title_name}>剧集信息修改成功!!!{"，".join(change_messages)}", )
-
-
-@flask_app.route("/api/episodes", methods=["DELETE"])
-def api_episodes_delete():
-    """删除单集内容"""
-    body = request.get_json(silent=True) or {}
-    title_name = str(body.get("titleName") or "").strip()
-    try:
-        episode_no = int(body.get("episodeNo"))
-    except (TypeError, ValueError):
-        episode_no = None
-
-    if not title_name or episode_no is None:
-        return build_json_response(400, message="参数不完整")
-    if episode_no <= 0:
-        return build_json_response(400, message="集号必须大于0")
-
-    with open_db_connection_in_transaction() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            DELETE
-            FROM episode e USING title t
-            WHERE e.title_id = t.id
-              AND t.name = %s
-              AND e.episode_no = %s
-            """,
-            (title_name, episode_no),
-        )
-        if cur.rowcount == 0:
-            return build_json_response(404, message="剧集不存在")
-    return build_json_response(200, message="剧集删除成功")
 
 
 def normalize_positive_int(value, default, max_value=None):

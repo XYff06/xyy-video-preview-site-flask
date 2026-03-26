@@ -1552,11 +1552,19 @@ function renderAdminPanel(adminPanelContainer) {
             const formData = new FormData(event.target);
             const payload = {
                 titleName: String(formData.get('titleName') || '').trim(),
-                episodeNo: Number(formData.get('episodeNo')),
-                newEpisodeNo: Number(formData.get('newEpisodeNo')),
-                videoUrl: String(formData.get('videoUrl') || '').trim()
+                titleEpisodeNo: Number(formData.get('episodeNo')),
+                newTitleEpisodeNo: Number(formData.get('newEpisodeNo')),
+                newTitleEpisodeVideo: String(formData.get('videoUrl') || '').trim()
             };
-            if (!payload.titleName || Number.isNaN(payload.episodeNo) || Number.isNaN(payload.newEpisodeNo)) return;
+            if (!payload.titleName || Number.isNaN(payload.titleEpisodeNo) || Number.isNaN(payload.newTitleEpisodeNo)) return;
+
+            const episodes = await getSeriesEpisodeOptions(payload.titleName);
+            const targetEpisode = episodes.find((episode) => episode.episode === payload.titleEpisodeNo);
+            if (!targetEpisode) return;
+
+            const hasChanged = payload.newTitleEpisodeNo !== targetEpisode.episode
+                || payload.newTitleEpisodeVideo !== String(targetEpisode.videoUrl || '').trim();
+            if (!hasChanged) return;
 
             try {
                 const responseJson = await requestJsonApiOrThrow('/api/episodes', {
