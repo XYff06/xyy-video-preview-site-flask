@@ -428,13 +428,12 @@ def api_titles_patch(title_name):
 @flask_app.route("/api/titles/<path:title_name>", methods=["DELETE"])
 def api_titles_delete(title_name):
     """删除漫剧"""
-    # 开启事务执行创建，创建成功会提交，失败会回滚
+    # 开启事务执行删除，删除成功会提交，失败会回滚
     with open_db_connection_in_transaction() as db_connection, db_connection.cursor() as db_cursor:
         db_cursor.execute("DELETE FROM title WHERE name = %s", (title_name,))
         if db_cursor.rowcount == 0:
-            return build_json_response(404, message=f"<{title_name}>漫剧不存在")
-    # 漫剧删除成功，返回200
-    return build_json_response(200, message=f"<{title_name}>漫剧删除成功")
+            return build_json_response(404, message=f"漫剧删除失败: 目标漫剧名<{title_name}>不存在")
+    return build_json_response(200, message=f"漫剧删除成功: 目标漫剧名<{title_name}>已删除")
 
 
 def extract_file_urls_from_directory_html(html: str, directory_url: str):

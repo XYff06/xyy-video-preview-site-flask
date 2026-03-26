@@ -91,6 +91,16 @@ function getSuccessMessage(responseJson, fallbackMessage) {
     return responseMessage || fallbackMessage;
 }
 
+function areSameStringSets(leftValues = [], rightValues = []) {
+    const leftSet = new Set(leftValues.map((value) => String(value).trim()).filter(Boolean));
+    const rightSet = new Set(rightValues.map((value) => String(value).trim()).filter(Boolean));
+    if (leftSet.size !== rightSet.size) return false;
+    for (const currentValue of leftSet) {
+        if (!rightSet.has(currentValue)) return false;
+    }
+    return true;
+}
+
 function normalizeSeriesSummaryRecord(seriesRecord) {
     return {
         ...seriesRecord,
@@ -1315,6 +1325,22 @@ function renderAdminPanel(adminPanelContainer) {
                     .map((tag) => String(tag).trim())
                     .filter(Boolean);
                 if (!oldName || !newName) return;
+
+                let targetSeries = getSeriesSummaryByName(oldName);
+                if (!targetSeries) {
+                    const seriesDetail = await loadSeriesDetailByName(oldName);
+                    if (seriesDetail) {
+                        targetSeries = cacheSeriesOptionRecord(seriesDetail);
+                    }
+                }
+                if (!targetSeries) return;
+
+                const currentPoster = String(targetSeries.poster || '').trim();
+                const currentTags = targetSeries.tags instanceof Set ? [...targetSeries.tags] : targetSeries.tags || [];
+                const hasChanged = newName !== targetSeries.name
+                    || newPoster !== currentPoster
+                    || !areSameStringSets(newTags, currentTags);
+                if (!hasChanged) return;
 
                 try {
                     const responseJson = await requestJsonApiOrThrow(`/api/titles/${encodeURIComponent(oldName)}`, {
