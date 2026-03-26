@@ -542,22 +542,18 @@ def build_episode_records_from_directory_input(directory_input: str, title_id: i
     return episode_records
 
 
+# TODO: 有很多争议之处
 @flask_app.route("/api/episodes/batch-directory", methods=["POST"])
 def api_episodes_batch_directory():
     """按目录批量导入剧集"""
     request_body = request.get_json(silent=True) or {}
-
-    if not is_valid_text(request_body.get("name")):
-        return build_json_response(400, message="无效name")
+    if not is_valid_text(request_body.get("titleName")):
+        return build_json_response(400, message="无效titleName")
+    title_name = request_body["titleName"].strip()
     if not is_valid_text(request_body.get("directory")):
         return build_json_response(400, message="无效directory")
-
-    title_name = request_body["name"].strip()
     directory = request_body["directory"].strip()
-    raw_poster = str(request_body.get("poster") or "").strip()
-    selected_tags = [tag_name.strip() for tag_name in request_body.get("tags", []) if is_valid_text(tag_name)]
-    selected_tags = list(dict.fromkeys(selected_tags))
-
+    title_poster = str(request_body.get("titlePoster") or "").strip()
     created_title = False
     parsed_episode_records = []
     upsert_stats = {"inserted": 0, "updated": 0}
@@ -653,37 +649,38 @@ def api_episodes_batch_directory():
 
 @flask_app.route("/api/episodes", methods=["POST"])
 def api_episodes_post():
-    """新增单集内容"""
+    """新增剧集"""
     # 尝试把请求体解析成JSON，如果解析失败、请求体为空或者不是合法JSON，就用空字典兜底
     request_body = request.get_json(silent=True) or {}
     if not is_valid_text(request_body.get("titleName")):
         return build_json_response(400, message="无效titleName")
-    title_name = request_body.get("titleName").strip()
+    title_name = request_body["titleName"].strip()
     try:
-        episode_no = int(request_body.get("episodeNo"))
+        title_episode_no = int(request_body.get("titleEpisodeNo"))
     except Exception:
-        return build_json_response(400, message="无效episodeNo")
-    if episode_no <= 0:
+        return build_json_response(400, message="无效titleEpisodeNo")
+    if title_episode_no <= 0:
         return build_json_response(400, message="集号必须大于0")
-    if not is_valid_text(request_body.get("videoUrl")):
-        return build_json_response(400, message="无效videoUrl")
-    raw_video_url = request_body.get("videoUrl").strip()
+    if not is_valid_text(request_body.get("titleEpisodeVideo")):
+        return build_json_response(400, message="无效titleEpisodeVideo")
+    title_episode_video = request_body.get("titleEpisodeVideo").strip()
 
-    # 开启事务执行创建，创建成功会提交，失败会回滚
     with open_db_connection_in_transaction() as db_connection, db_connection.cursor() as db_cursor:
         db_cursor.execute("SELECT id FROM title WHERE name = %s", (title_name,))
         title_row = db_cursor.fetchone()
         if not title_row:
-            return build_json_response(404, message=f"<{title_name}>漫剧不存在")
+            return build_json_response(404, message=f"漫剧新增剧集失败: 漫剧<{title_name}>不存在")
+        title_id = title_row["id"]
+
         try:
-            video_url = resolve_resource_to_url(raw_video_url, str(title_row["id"]), local_path_kind="file", )
+            title_episode_video_url = resolve_resource_to_url(title_episode_video, str(title_id), local_path_kind="file", )
         except Exception as e:
             return build_json_response(400, message=str(e))
         try:
-            db_cursor.execute("INSERT INTO episode(title_id, episode_no, episode_url) VALUES (%s, %s, %s)", (title_row["id"], episode_no, video_url))
+            db_cursor.execute("INSERT INTO episode(title_id, episode_no, episode_url) VALUES (%s, %s, %s)", (title_id, title_episode_no, title_episode_video_url))
         except UniqueViolation:
-            return build_json_response(409, message=f"<{title_name}>漫剧目标集号<{episode_no}>已存在")
-    return build_json_response(201, message=f"<{title_name}>漫剧剧集新增成功")
+            return build_json_response(409, message=f"漫剧<{title_name}>新增剧集失败: 目标集号<{title_episode_no}>已存在")
+    return build_json_response(201, message=f"漫剧<{title_name}>新增剧集成功: 目标集号<{title_episode_no}>已创建，视频url: <{title_episode_video_url}>")
 
 
 @flask_app.route("/api/episodes", methods=["PATCH"])

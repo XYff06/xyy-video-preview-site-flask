@@ -350,7 +350,7 @@ async function getSeriesEpisodeOptions(titleName) {
     return matchedSeriesDetail.episodes;
 }
 
-async function fetchSeriesOptionsPage(search = '', page = 1, pageSize = 10) {
+async function fetchSeriesOptionsPage(search = '', page = 1, pageSize = 5) {
     const params = new URLSearchParams();
     params.set('page', String(page));
     params.set('pageSize', String(pageSize));
@@ -397,7 +397,7 @@ function bindSeriesPickerHandlers(scope) {
         const prevButton = pickerRoot.querySelector('[data-picker-prev]');
         const nextButton = pickerRoot.querySelector('[data-picker-next]');
         const placeholderText = pickerRoot.dataset.placeholder || '选择漫剧';
-        const pageSize = 10;
+        const pageSize = 5;
         const pickerState = {
             search: '',
             page: 1,
