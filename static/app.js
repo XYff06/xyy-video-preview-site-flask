@@ -1597,10 +1597,10 @@ function renderAdminPanel(adminPanelContainer) {
             event.preventDefault();
             const formData = new FormData(event.target);
             const payload = {
-                titleName: String(formData.get('titleName') || '').trim(), episodeNo: Number(formData.get('episodeNo'))
+                titleName: String(formData.get('titleName') || '').trim(), titleEpisodeNo: Number(formData.get('episodeNo'))
             };
-            if (!payload.titleName || Number.isNaN(payload.episodeNo)) return;
-            if (!confirm(`确认删除「${payload.titleName}」第${payload.episodeNo}集？`)) return;
+            if (!payload.titleName || Number.isNaN(payload.titleEpisodeNo)) return;
+            if (!confirm(`确认删除「${payload.titleName}」第${payload.titleEpisodeNo}集？`)) return;
 
             try {
                 const responseJson = await requestJsonApiOrThrow('/api/episodes', {
