@@ -674,10 +674,9 @@ def build_episode_records_from_directory_input(directory_input: str, title_id: i
     return episode_records
 
 
-# TODO: 有很多争议之处
 @flask_app.route("/api/episodes/batch-directory", methods=["POST"])
 def api_episodes_batch_directory():
-    """按目录批量导入剧集"""
+    """按目录批量导入剧集，如果漫剧已存在且这次还没有拿到用户"继续导入"的确认，那就先把当前漫剧的概要信息返回给前端，让前端停下来做二次确认，只有在漫剧不存在或者确认了继续导入的时候，才继续往下做真正的导入逻辑"""
     request_body = request.get_json(silent=True) or {}
     if not is_valid_text(request_body.get("titleName")):
         return build_json_response(400, message="无效titleName")
@@ -686,96 +685,111 @@ def api_episodes_batch_directory():
         return build_json_response(400, message="无效directory")
     directory = request_body["directory"].strip()
     title_poster = str(request_body.get("titlePoster") or "").strip()
+    continue_import_for_existing_title = bool(request_body.get("continueImportForExistingTitle"))
     created_title = False
-    parsed_episode_records = []
-    upsert_stats = {"inserted": 0, "updated": 0}
 
     try:
         with open_db_connection_in_transaction() as db_connection, db_connection.cursor() as db_cursor:
-            db_cursor.execute("SELECT id FROM title WHERE name = %s", (title_name,))
+            db_cursor.execute("SELECT id, cover_url FROM title WHERE name = %s", (title_name,))
             title_row = db_cursor.fetchone()
+            final_title_cover_url = title_row["cover_url"] if title_row else None
+
+            if title_row and not continue_import_for_existing_title:
+                title_id = title_row["id"]
+
+                db_cursor.execute(
+                    """
+                    SELECT COUNT(*)::int AS total, COALESCE(ARRAY_AGG(episode_no ORDER BY episode_no), ARRAY[]::int[]) AS episode_numbers
+                    FROM episode
+                    WHERE title_id = %s
+                    """,
+                    (title_id,),
+                )
+                episode_summary_row = db_cursor.fetchone() or {"total": 0, "episode_numbers": []}
+
+                db_cursor.execute(
+                    """
+                    SELECT tag.tag_name
+                    FROM title_tag
+                             JOIN tag ON tag.id = title_tag.tag_id
+                    WHERE title_tag.title_id = %s
+                    ORDER BY tag.tag_name ASC
+                    """,
+                    (title_id,),
+                )
+                current_tags = [row["tag_name"] for row in db_cursor.fetchall()]
+
+                cover_url_text = title_row["cover_url"] if title_row["cover_url"] else "无"
+                tag_text = "、".join(current_tags) if current_tags else "无"
+                episode_numbers_text = "、".join(str(episode_no) for episode_no in episode_summary_row["episode_numbers"]) or "无"
+
+                return build_json_response(
+                    200,
+                    requiresConfirmation=True,
+                    message=(
+                        f"当前海报资源地址: <{cover_url_text}>\n"
+                        f"当前漫剧绑定标签: <{tag_text}>\n"
+                        f"当前已存在剧集数: <{episode_summary_row['total']}>\n"
+                        f"具体集数: <{episode_numbers_text}>\n"
+                        f"继续导入可能会新增或更新剧集，请确认是否继续!!!"
+                    ),
+                )
+
+            title_tags = normalize_and_validate_tag_names(request_body.get("titleTags", []), db_cursor)
 
             if title_row:
                 title_id = title_row["id"]
             else:
-                db_cursor.execute(
-                    "INSERT INTO title(name, cover_url) VALUES (%s, %s) RETURNING id",
-                    (title_name, None),
-                )
+                db_cursor.execute("INSERT INTO title(name, cover_url) VALUES (%s, %s) RETURNING id", (title_name, None), )
                 title_id = db_cursor.fetchone()["id"]
                 created_title = True
+            replace_title_tags(db_connection, title_id, title_tags)
+            if title_poster:
+                poster_url = resolve_resource_to_url(title_poster, str(title_id), local_path_kind="file", )
+                db_cursor.execute("UPDATE title SET cover_url = %s WHERE id = %s", (poster_url, title_id), )
+                final_title_cover_url = poster_url
 
-            if selected_tags:
-                db_cursor.execute(
-                    "SELECT tag_name FROM tag WHERE tag_name = ANY(%s)",
-                    (selected_tags,),
-                )
-                existing_tag_names = {row["tag_name"] for row in db_cursor.fetchall()}
-                missing_tag_names = [tag_name for tag_name in selected_tags if tag_name not in existing_tag_names]
-                if missing_tag_names:
-                    raise Exception(f"以下标签不存在: {'、'.join(missing_tag_names)}")
-
-            replace_title_tags(db_connection, title_id, selected_tags)
-
-            if raw_poster:
-                poster_url = resolve_resource_to_url(
-                    raw_poster,
-                    str(title_id),
-                    local_path_kind="file",
-                )
-                db_cursor.execute(
-                    "UPDATE title SET cover_url = %s WHERE id = %s",
-                    (poster_url, title_id),
-                )
-
-            parsed_episode_records = build_episode_records_from_directory_input(directory, title_id)
-            if not parsed_episode_records:
-                raise Exception("目录中没有识别到可解析的视频")
-
+            parsed_episode_records: list = build_episode_records_from_directory_input(directory, title_id)
             episode_numbers = [item["episodeNo"] for item in parsed_episode_records]
             episode_urls = [item["videoUrl"] for item in parsed_episode_records]
 
             db_cursor.execute(
                 """
-                WITH input AS (SELECT *
-                               FROM UNNEST(%s::int[], %s::text[]) AS u(episode_no, episode_url)),
+                WITH input AS (SELECT * FROM UNNEST(%s::int[], %s::text[]) AS input_rows(episode_no, episode_url)),
                      inserted AS (
                 INSERT
                 INTO episode(title_id, episode_no, episode_url)
-                SELECT %s, i.episode_no, i.episode_url
-                FROM input i ON CONFLICT (title_id, episode_no) DO NOTHING
-                    RETURNING episode_no
-                ),
-                updated AS (
-                UPDATE episode e
-                SET episode_url = i.episode_url
-                FROM input i
-                WHERE e.title_id = %s
-                  AND e.episode_no = i.episode_no
-                  AND NOT EXISTS (
-                    SELECT 1
-                    FROM inserted ins
-                    WHERE ins.episode_no = i.episode_no
-                    )
-                    RETURNING e.episode_no
-                    )
-                SELECT (SELECT COUNT(*) ::int FROM inserted) AS inserted,
-                       (SELECT COUNT(*) ::int FROM updated)  AS updated
+                SELECT %s, input.episode_no, input.episode_url
+                FROM input ON CONFLICT (title_id, episode_no) DO NOTHING RETURNING episode_no ), updated AS (
+                UPDATE episode
+                SET episode_url = input.episode_url
+                FROM input
+                WHERE episode.title_id = %s
+                  AND episode.episode_no = input.episode_no
+                  AND NOT EXISTS ( SELECT 1 FROM inserted WHERE inserted.episode_no = input.episode_no ) RETURNING episode.episode_no )
+                SELECT (SELECT COUNT(*) :: int FROM inserted) AS inserted, (SELECT COUNT(*) :: int FROM updated) AS updated
                 """,
                 (episode_numbers, episode_urls, title_id, title_id),
             )
-            upsert_stats = db_cursor.fetchone() or {"inserted": 0, "updated": 0}
-
+            upsert_stats: dict = db_cursor.fetchone() or {"inserted": 0, "updated": 0}
     except UniqueViolation:
-        return build_json_response(409, message=f"<{title_name}>漫剧名称已存在")
-    except ValueError as error:
-        return build_json_response(400, message=str(error))
+        return build_json_response(409, message=f"漫剧<{title_name}>批量导入剧集失败: 目标漫剧名<{title_name}>已存在")
     except Exception as error:
         return build_json_response(400, message=str(error))
 
+    action_text = "新建并导入" if created_title else "导入完成"
+    stats_message = f"新增{upsert_stats["inserted"]}集" if created_title else f"新增{upsert_stats["inserted"]}集，更新{upsert_stats["updated"]}集"
+    final_title_cover_url_text = final_title_cover_url if final_title_cover_url else "无"
+    final_title_tag_text = "、".join(title_tags) if title_tags else "无"
     return build_json_response(
         201 if created_title else 200,
-        message=f"批量导入完成，共识别{len(parsed_episode_records)}集，新增{upsert_stats["inserted"]}集，更新{upsert_stats["updated"]}集",
+        requiresConfirmation=False,
+        message=(
+            f"漫剧<{title_name}>{action_text}\n"
+            f"共识别{len(parsed_episode_records)}集，{stats_message}\n"
+            f"当前漫剧海报资源地址: <{final_title_cover_url_text}>\n"
+            f"当前漫剧绑定标签: <{final_title_tag_text}>"
+        ),
     )
 
 

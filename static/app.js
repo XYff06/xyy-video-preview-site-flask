@@ -53,7 +53,15 @@ const uiState = {
     renderedFlashVersion: 0, // 当前界面已经处理过的提示版本号
     activeTagAction: 'create', // 标签管理当前子操作
     activeTitleAdminAction: 'create', // 漫剧管理当前子操作
-    activeEpisodeAdminAction: 'create' // 剧集管理当前子操作
+    activeEpisodeAdminAction: 'create', // 剧集管理当前子操作
+    episodeBatchDraft: {
+        titleName: '',
+        titlePoster: '',
+        directory: '',
+        titleTags: []
+    },
+    episodeBatchPendingConfirmation: null,
+    episodeBatchSubmitting: false
 };
 const pendingSeriesDetailRequests = new Map();
 
@@ -91,6 +99,10 @@ function getSuccessMessage(responseJson, fallbackMessage) {
     return responseMessage || fallbackMessage;
 }
 
+function normalizeStringList(values = []) {
+    return [...new Set(values.map((value) => String(value).trim()).filter(Boolean))];
+}
+
 function areSameStringSets(leftValues = [], rightValues = []) {
     const leftSet = new Set(leftValues.map((value) => String(value).trim()).filter(Boolean));
     const rightSet = new Set(rightValues.map((value) => String(value).trim()).filter(Boolean));
@@ -99,6 +111,53 @@ function areSameStringSets(leftValues = [], rightValues = []) {
         if (!rightSet.has(currentValue)) return false;
     }
     return true;
+}
+
+function normalizeEpisodeBatchDraft(draft = {}) {
+    return {
+        titleName: String(draft.titleName || '').trim(),
+        titlePoster: String(draft.titlePoster || '').trim(),
+        directory: String(draft.directory || '').trim(),
+        titleTags: normalizeStringList(draft.titleTags || [])
+    };
+}
+
+function buildEpisodeBatchDraftFromFormData(formData) {
+    return normalizeEpisodeBatchDraft({
+        titleName: formData.get('name'),
+        titlePoster: formData.get('poster'),
+        directory: formData.get('directory'),
+        titleTags: formData.getAll('batchTags')
+    });
+}
+
+function buildEpisodeBatchRequestPayload(draft, continueImportForExistingTitle = false) {
+    const normalizedDraft = normalizeEpisodeBatchDraft(draft);
+    return {
+        titleName: normalizedDraft.titleName,
+        titlePoster: normalizedDraft.titlePoster,
+        directory: normalizedDraft.directory,
+        titleTags: normalizedDraft.titleTags,
+        continueImportForExistingTitle
+    };
+}
+
+function renderEpisodeBatchConfirmationHtml() {
+    const pendingConfirmation = uiState.episodeBatchPendingConfirmation;
+    if (!pendingConfirmation) return '';
+
+    const summary = pendingConfirmation.data || {};
+    const tagSummary = (summary.tags || []).length ? summary.tags.join('、') : '无';
+    return `
+<section class="batch-confirm-card">
+    <p class="batch-confirm-title">漫剧&lt${escapeHtml(summary.titleName || pendingConfirmation.payload.titleName)}&gt</EXTERNAL_FRAGMENT>已存在</p>
+    <p class="batch-confirm-text">${escapeHtml(pendingConfirmation.message || '继续导入可能会新增或更新已有剧集，请确认是否继续。')}</p>
+    <div class="batch-confirm-actions">
+        <button type="button" class="batch-confirm-cancel" id="episode-batch-cancel-confirm">取消</button>
+        <button type="button" class="batch-confirm-submit" id="episode-batch-confirm-import">继续导入</button>
+    </div>
+</section>
+    `;
 }
 
 function normalizeSeriesSummaryRecord(seriesRecord) {
@@ -1387,6 +1446,7 @@ function renderAdminPanel(adminPanelContainer) {
     }
 
     // 剧集管理分区同样采用 重绘模板后重新绑定事件 的方式
+    const batchDraft = normalizeEpisodeBatchDraft(uiState.episodeBatchDraft);
     adminPanelContainer.innerHTML = `
     <section class="admin-panel">
       <div class="action-tabs episode-action-tabs">
@@ -1407,12 +1467,13 @@ function renderAdminPanel(adminPanelContainer) {
 
       <section class="action-panel ${uiState.activeEpisodeAdminAction === 'batch' ? '' : 'hidden'}">
         <form id="episode-batch-form" class="stack-form">
-          <input name="name" required placeholder="漫剧名" />
-          <input name="poster" placeholder="海报资源地址: 支持https://...或服务端本地绝对路径" />
-          <input name="directory" required placeholder="视频目录资源地址: 支持https://...或服务端本地绝对路径" />
-          ${renderTagMultiSelectHtml('batchTags', collectAvailableTags())}
+          <input name="name" required placeholder="漫剧名" value="${escapeHtml(batchDraft.titleName)}" />
+          <input name="poster" placeholder="海报资源地址: 支持https://...或服务端本地绝对路径" value="${escapeHtml(batchDraft.titlePoster)}" />
+          <input name="directory" required placeholder="视频目录资源地址: 支持https://...或服务端本地绝对路径" value="${escapeHtml(batchDraft.directory)}" />
+          ${renderTagMultiSelectHtml('batchTags', collectAvailableTags(), batchDraft.titleTags)}
           <p class="hint">会自动解析目录下视频链接并按文件名中的"第1集/第一集/EP01"等集号排序导入</p>
-          <button type="submit">批量导入</button>
+          <button type="submit" ${uiState.episodeBatchSubmitting ? 'disabled' : ''}>${uiState.episodeBatchSubmitting ? '导入中...' : '批量导入'}</button>
+          ${renderEpisodeBatchConfirmationHtml()}
         </form>
       </section>
 
@@ -1484,32 +1545,83 @@ function renderAdminPanel(adminPanelContainer) {
 
     const episodeBatchForm = document.getElementById('episode-batch-form');
     if (episodeBatchForm) {
-        episodeBatchForm.onsubmit = async (event) => {
-            event.preventDefault();
-            const formData = new FormData(event.target);
-            const payload = {
-                name: String(formData.get('name') || '').trim(),
-                poster: String(formData.get('poster') || '').trim(),
-                directory: String(formData.get('directory') || '').trim(),
-                // getAll 会先取出全部 batchTags
-                // 后面的 map 和 filter 再负责裁剪空白并过滤空字符串
-                tags: formData.getAll('batchTags').map((item) => String(item).trim()).filter(Boolean)
-            };
+        const syncEpisodeBatchDraft = () => {
+            uiState.episodeBatchDraft = buildEpisodeBatchDraftFromFormData(new FormData(episodeBatchForm));
+        };
+
+        const clearEpisodeBatchConfirmation = (shouldRerender = false) => {
+            uiState.episodeBatchPendingConfirmation = null;
+            if (shouldRerender) render();
+        };
+
+        const submitEpisodeBatchImport = async (draft, continueImportForExistingTitle = false) => {
+            const payload = buildEpisodeBatchRequestPayload(draft, continueImportForExistingTitle);
+            uiState.episodeBatchDraft = normalizeEpisodeBatchDraft(draft);
+            uiState.episodeBatchSubmitting = true;
+            render();
 
             try {
                 const result = await requestJsonApiOrThrow('/api/episodes/batch-directory', {
-                    method: 'POST', body: JSON.stringify(payload)
+                    method: 'POST',
+                    body: JSON.stringify(payload)
                 });
+
+                if (result.requiresConfirmation) {
+                    uiState.episodeBatchPendingConfirmation = {
+                        payload: normalizeEpisodeBatchDraft(draft),
+                        data: result.data || {},
+                        message: result.message || ''
+                    };
+                    uiState.episodeBatchSubmitting = false;
+                    render();
+                    return;
+                }
+
+                uiState.episodeBatchPendingConfirmation = null;
+                uiState.episodeBatchSubmitting = false;
+                uiState.episodeBatchDraft = normalizeEpisodeBatchDraft({});
                 showFlashMessage(getSuccessMessage(result, '批量导入成功'));
-                if (getCurrentRouteSeriesName() === payload.name) {
+                if (getCurrentRouteSeriesName() === payload.titleName) {
                     uiState.selectedEpisode = 1;
                 }
                 await reloadBaseDataAndRender();
             } catch (error) {
+                uiState.episodeBatchSubmitting = false;
                 showFlashMessage(error.message);
                 render();
             }
         };
+
+        const handleEpisodeBatchDraftChange = () => {
+            syncEpisodeBatchDraft();
+            if (uiState.episodeBatchPendingConfirmation) {
+                clearEpisodeBatchConfirmation(true);
+            }
+        };
+
+        episodeBatchForm.addEventListener('input', handleEpisodeBatchDraftChange);
+        episodeBatchForm.addEventListener('change', handleEpisodeBatchDraftChange);
+
+        episodeBatchForm.onsubmit = async (event) => {
+            event.preventDefault();
+            const draft = buildEpisodeBatchDraftFromFormData(new FormData(event.target));
+            await submitEpisodeBatchImport(draft, false);
+        };
+
+        const episodeBatchCancelConfirmButton = document.getElementById('episode-batch-cancel-confirm');
+        if (episodeBatchCancelConfirmButton) {
+            episodeBatchCancelConfirmButton.onclick = () => {
+                clearEpisodeBatchConfirmation(true);
+            };
+        }
+
+        const episodeBatchConfirmImportButton = document.getElementById('episode-batch-confirm-import');
+        if (episodeBatchConfirmImportButton) {
+            episodeBatchConfirmImportButton.onclick = async () => {
+                if (!uiState.episodeBatchPendingConfirmation) return;
+                await submitEpisodeBatchImport(uiState.episodeBatchPendingConfirmation.payload, true);
+            };
+        }
     }
 
     const episodeUpdateForm = document.getElementById('episode-update-form');
