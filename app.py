@@ -863,54 +863,48 @@ def convert_to_iso_datetime(value):
 def serialize_series_list_record(row):
     """把列表查询结果整理成首页卡片可直接消费的结构"""
     return {
-        "id": row["id"],
         "name": row["name"],
         "poster": row["poster"],
-        "firstIngestedAt": convert_to_iso_datetime(row["firstIngestedAt"]),
-        "updatedAt": convert_to_iso_datetime(row["updatedAt"]),
-        "lastNewEpisodeAt": convert_to_iso_datetime(row["lastNewEpisodeAt"]),
-        "tags": row.get("tags") or [],
-        "totalEpisodeCount": int(row.get("totalEpisodeCount") or 0),
         "currentMaxEpisodeNo": int(row.get("currentMaxEpisodeNo") or 0),
+        "totalEpisodeCount": int(row.get("totalEpisodeCount") or 0),
+        "updatedAt": convert_to_iso_datetime(row["updatedAt"]),
+        "firstIngestedAt": convert_to_iso_datetime(row["firstIngestedAt"]),
     }
 
 
-def query_series_page_data(tag=None, name=None, search=None, sort=None, page=1, page_size=25):
+def query_series_page_data(tag=None, search=None, sort=None, page=1, page_size=25):
     """
-    把前端传来的筛选条件转换成SQL:
-    1. 分页选出当前页的漫剧
-    2. 把每部漫剧关联的标签和剧集一起聚合出来
-    3. 最后整理成前端直接能渲染的JSON结构
+    把前端传来的筛选条件转换成列表页查询:
+    1. 根据tag/search生成WHERE条件
+    2. 查询总条数并计算当前页与总页数
+    3. 按sort排序后分页查询当前页漫剧
+    4. 返回首页卡片需要的字段和分页信息
     """
-    # TODO: 优化性能
     filters = []  # filters保存WHERE里的条件片段
     values = []  # values保存这些条件对应的参数值
 
-    # 如果前端传了标签，就把标签值加入参数列表，后面会传给%s占位符
-    if tag:
-        values.append(tag)
-        # 筛选出拥有指定标签的title
-        filters.append("""EXISTS (SELECT 1 FROM title_tag JOIN tag ON tag.id = title_tag.tag_id WHERE title_tag.title_id = title.id AND tag.tag_name = %s)""")
-    if name:
-        values.append(name)
-        filters.append("title.name = %s")
-    if search:
-        # 搜索关键字会先转成小写，再和LOWER(name)做模糊匹配
-        values.append(f"%{search.strip().lower()}%")
-        filters.append("LOWER(title.name) LIKE %s")
-
-    where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
+    normalized_search = (search or "").strip().lower()
     order_by_clause = build_series_order_by_sql(sort)
     order_by_selected_titles = order_by_clause.replace("title.", "paged_titles.")
 
     with open_db_connection() as db_connection, db_connection.cursor() as db_cursor:
+        if tag:
+            db_cursor.execute("SELECT id FROM tag WHERE tag_name = %s", (tag,))
+            tag_row = db_cursor.fetchone()
+            if not tag_row:
+                return {"data": [], "pagination": {"total": 0, "page": 1, "pageSize": page_size, "totalPages": 1, }, }
+            values.append(tag_row["id"])
+            filters.append("""EXISTS ( SELECT 1 FROM title_tag WHERE title_tag.title_id = title.id AND title_tag.tag_id = %s )""")
+        if normalized_search:
+            values.append(f"%{normalized_search}%")
+            filters.append("LOWER(title.name) LIKE %s")
+        where_clause = f"WHERE {" AND ".join(filters)}" if filters else ""
         db_cursor.execute(f"""SELECT COUNT(*)::int AS total FROM title {where_clause}""", values, )
         total = db_cursor.fetchone()["total"] or 0
         total_pages = max(1, math.ceil(total / page_size))
         safe_page = max(1, min(page, total_pages))
         offset = (safe_page - 1) * page_size
 
-        # 先分页拿到当前页title，再分别按title聚合剧集和标签，避免episode和tag做JOIN后放大结果集
         db_cursor.execute(
             f"""
             WITH paged_titles AS (
@@ -918,55 +912,30 @@ def query_series_page_data(tag=None, name=None, search=None, sort=None, page=1, 
                 title.id,
                 title.name,
                 title.cover_url,
-                title.first_ingested_at,
-                title.last_new_episode_at,
-                title.updated_at,
+                title.current_max_episode_no,
                 title.total_episode_count,
-                title.current_max_episode_no
-              FROM title
-              {where_clause}
+                title.updated_at,
+                title.first_ingested_at
+              FROM title {where_clause}
               ORDER BY {order_by_clause}
               LIMIT %s OFFSET %s
             )
             SELECT
-              paged_titles.id,
               paged_titles.name,
               paged_titles.cover_url AS poster,
-              paged_titles.first_ingested_at AS "firstIngestedAt",
-              paged_titles.updated_at AS "updatedAt",
-              paged_titles.total_episode_count AS "totalEpisodeCount",
               paged_titles.current_max_episode_no AS "currentMaxEpisodeNo",
-              paged_titles.last_new_episode_at AS "lastNewEpisodeAt",
-              COALESCE(tag_summary.tags, ARRAY[]::text[]) AS tags
+              paged_titles.total_episode_count AS "totalEpisodeCount",
+              paged_titles.updated_at AS "updatedAt",
+              paged_titles.first_ingested_at AS "firstIngestedAt"
             FROM paged_titles
-            LEFT JOIN LATERAL (
-                SELECT
-                  COALESCE(
-                    ARRAY_AGG(tag.tag_name ORDER BY tag.tag_name),
-                    ARRAY[]::text[]
-                  ) AS tags
-              FROM title_tag
-              JOIN tag ON tag.id = title_tag.tag_id
-              WHERE title_tag.title_id = paged_titles.id
-            ) AS tag_summary ON TRUE
             ORDER BY {order_by_selected_titles}
             """,
             [*values, page_size, offset],
         )
         rows = db_cursor.fetchall()
 
-    # 列表推导会把数据库行逐条转换成前端直接可消费的结构
     data = [serialize_series_list_record(row) for row in rows]
-    payload = {
-        "data": data,
-        "pagination": {
-            "total": total,
-            "page": safe_page,
-            "pageSize": page_size,
-            "totalPages": total_pages,
-        },
-    }
-    return payload
+    return {"data": data, "pagination": {"total": total, "page": safe_page, "pageSize": page_size, "totalPages": total_pages, }, }
 
 
 @flask_app.route("/api/series", methods=["GET"])
@@ -974,7 +943,6 @@ def api_series():
     """根据前端传来的查询参数，返回"漫剧列表页"需要的数据，支持: 标签筛选、名称筛选、关键字搜索、排序、分页"""
     payload = query_series_page_data(
         tag=request.args.get("tag"),
-        name=request.args.get("name"),
         search=request.args.get("search"),
         sort=request.args.get("sort"),
         page=normalize_positive_int(request.args.get("page"), 1),

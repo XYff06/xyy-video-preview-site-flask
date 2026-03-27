@@ -299,42 +299,12 @@ async function loadHomeSeriesPageData() {
 /**
  * 获取当前可用的标签列表
  *
- * 优先使用后端独立返回的标签全集
- * 缺失时再从漫剧数据里反推
+ * 首页和管理页统一依赖 /api/tags 返回的标签全集
  *
- * @returns {string[]} 排序后的标签列表
+ * @returns {string[]} 标签列表
  */
 function collectAvailableTags() {
-    if (uiState.allTags.length > 0) {
-        return [...uiState.allTags];
-    }
-
-    /**
-     * /api/tags 为空时
-     * 退回到当前已加载的漫剧数据里汇总标签
-     * 这样首页即使只有 /api/series 带回了 tags 也能先把筛选项渲染出来
-     */
-    const fallbackTagSet = new Set();
-
-    uiState.homeSeries.forEach((series) => {
-        const seriesTags = series.tags instanceof Set ? [...series.tags] : series.tags || [];
-        seriesTags.forEach((tagName) => {
-            if (String(tagName || '').trim()) {
-                fallbackTagSet.add(String(tagName).trim());
-            }
-        });
-    });
-
-    Object.values(uiState.seriesDetailsByName).forEach((seriesDetail) => {
-        const seriesTags = seriesDetail.tags instanceof Set ? [...seriesDetail.tags] : seriesDetail.tags || [];
-        seriesTags.forEach((tagName) => {
-            if (String(tagName || '').trim()) {
-                fallbackTagSet.add(String(tagName).trim());
-            }
-        });
-    });
-
-    return [...fallbackTagSet].sort((leftTagName, rightTagName) => leftTagName.localeCompare(rightTagName, 'zh-CN'));
+    return [...uiState.allTags];
 }
 
 

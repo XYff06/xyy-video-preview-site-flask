@@ -19,7 +19,9 @@ CREATE TABLE IF NOT EXISTS title (
 
 CREATE INDEX IF NOT EXISTS index_title_updated_at ON title (updated_at DESC);
 CREATE INDEX IF NOT EXISTS index_title_updated_at_name ON title (updated_at DESC, name ASC);
+CREATE INDEX IF NOT EXISTS index_title_updated_at_asc_name ON title (updated_at ASC, name ASC);
 CREATE INDEX IF NOT EXISTS index_title_first_ingested_at_name ON title (first_ingested_at DESC, name ASC);
+CREATE INDEX IF NOT EXISTS index_title_first_ingested_at_asc_name ON title (first_ingested_at ASC, name ASC);
 CREATE INDEX IF NOT EXISTS index_title_last_new_episode_at ON title (last_new_episode_at DESC);
 CREATE INDEX IF NOT EXISTS index_title_name ON title (name ASC);
 CREATE INDEX IF NOT EXISTS index_title_name_id_include_cover_url ON title (name ASC, id ASC) INCLUDE (cover_url);
