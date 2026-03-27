@@ -1,4 +1,4 @@
-import math
+﻿import math
 import os
 import re
 import time
@@ -794,19 +794,7 @@ def api_episodes_batch_directory():
 
 
 def normalize_positive_int(value, default, max_value=None):
-    """
-    把输入值规范成正整数
-    Args:
-        value:
-            需要解析的输入值
-        default:
-            解析失败或结果不是正整数时返回的默认值
-        max_value:
-            允许的最大值，不为None时，返回值不会超过这个上限
-    Returns:
-        int:
-            规范化后的正整数结果
-    """
+    """把输入值规范成正整数"""
     try:
         parsed = int(value)
     except Exception:
@@ -823,7 +811,7 @@ def api_titles_get():
     """返回管理面板使用的漫剧基础列表: name、cover_url、tags"""
     search = str(request.args.get("search") or "").strip()
     page = normalize_positive_int(request.args.get("page"), 1)
-    page_size = normalize_positive_int(request.args.get("pageSize"), 20, 100)
+    page_size = normalize_positive_int(request.args.get("pageSize"), 5, 10)
     filters = []
     values = []
     if search:
@@ -836,46 +824,7 @@ def api_titles_get():
         total_pages = max(1, math.ceil(total / page_size))
         safe_page = max(1, min(page, total_pages))
         offset = (safe_page - 1) * page_size
-        db_cursor.execute(
-            f"""
-            WITH paged_titles AS (
-              SELECT
-                title.id,
-                title.name,
-                title.cover_url
-              FROM
-                title {where_clause}
-              ORDER BY
-                title.name ASC,
-                title.id ASC
-              LIMIT
-                %s OFFSET %s
-            )
-            SELECT
-              paged_titles.name,
-              paged_titles.cover_url,
-              COALESCE(tag_summary.tags, ARRAY [] :: text []) AS tags
-            FROM
-              paged_titles
-              LEFT JOIN LATERAL (
-                SELECT
-                  ARRAY_AGG(
-                    tag.tag_name
-                    ORDER BY
-                      tag.tag_name
-                  ) AS tags
-                FROM
-                  title_tag
-                  JOIN tag ON tag.id = title_tag.tag_id
-                WHERE
-                  title_tag.title_id = paged_titles.id
-              ) AS tag_summary ON TRUE
-            ORDER BY
-              paged_titles.name ASC,
-              paged_titles.id ASC
-            """,
-            [*values, page_size, offset],
-        )
+        db_cursor.execute(f"""WITH paged_titles AS ( SELECT title.id, title.name, title.cover_url FROM title {where_clause} ORDER BY title.name ASC, title.id ASC LIMIT %s OFFSET %s ), tag_summary AS ( SELECT title_tag.title_id, ARRAY_AGG(tag.tag_name ORDER BY tag.tag_name) AS tags FROM title_tag JOIN tag ON tag.id = title_tag.tag_id JOIN paged_titles ON paged_titles.id = title_tag.title_id GROUP BY title_tag.title_id ) SELECT paged_titles.name, paged_titles.cover_url, COALESCE(tag_summary.tags, ARRAY[]::text[]) AS tags FROM paged_titles LEFT JOIN tag_summary ON tag_summary.title_id = paged_titles.id ORDER BY paged_titles.name ASC, paged_titles.id ASC""", [*values, page_size, offset], )
         title_rows = db_cursor.fetchall()
     return build_json_response(
         200,
