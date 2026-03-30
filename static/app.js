@@ -183,12 +183,15 @@ function cacheSeriesOptionRecord(titleRecord) {
     return normalizedRecord;
 }
 
-function normalizeSeriesDetailRecord(seriesRecord) {
+function normalizeSeriesDetailRecord(titleName, seriesRecord) {
+    const summaryRecord = getSeriesSummaryByName(titleName) || {name: titleName};
     const normalizedDetailRecord = {
-        ...normalizeSeriesSummaryRecord(seriesRecord),
+        ...normalizeSeriesSummaryRecord(summaryRecord),
+        ...seriesRecord,
+        name: titleName,
         episodes: normalizeEpisodeRecords(seriesRecord.episodes || [])
     };
-    uiState.seriesDetailsByName[normalizedDetailRecord.name] = normalizedDetailRecord;
+    uiState.seriesDetailsByName[titleName] = normalizedDetailRecord;
     return normalizedDetailRecord;
 }
 
@@ -207,7 +210,7 @@ async function loadSeriesDetailByName(titleName, forceReload = false) {
 
     const detailRequest = requestJsonApiOrThrow(`/api/series/${encodeURIComponent(titleName)}`)
         .then((payload) => {
-            return payload.data ? normalizeSeriesDetailRecord(payload.data) : null;
+            return payload.data ? normalizeSeriesDetailRecord(titleName, payload.data) : null;
         })
         .finally(() => {
             pendingSeriesDetailRequests.delete(titleName);
@@ -340,7 +343,7 @@ function normalizeEpisodeRecords(episodes) {
     episodes.forEach((episode) => {
         // 后端返回的 episode 可能是字符串也可能是数字
         // 这里先统一转成 Number 再参与比较
-        const episodeNo = Number(episode.episode);
+        const episodeNo = Number(episode.episodeNo);
 
         // 无法识别成有效集号的记录直接跳过
         // 避免污染后续排序和选择逻辑
@@ -350,7 +353,7 @@ function normalizeEpisodeRecords(episodes) {
         if (!existingEpisode) {
             // 第一次遇到某个集号时直接保存
             // 同时把 episode 字段规范成数值型
-            latestEpisodeByNumber.set(episodeNo, {...episode, episode: episodeNo});
+            latestEpisodeByNumber.set(episodeNo, {...episode, episodeNo});
             return;
         }
 
@@ -359,12 +362,12 @@ function normalizeEpisodeRecords(episodes) {
         const currentUpdatedAt = new Date(existingEpisode.updatedAt || 0).getTime();
         const nextUpdatedAt = new Date(episode.updatedAt || 0).getTime();
         if (nextUpdatedAt >= currentUpdatedAt) {
-            latestEpisodeByNumber.set(episodeNo, {...episode, episode: episodeNo});
+            latestEpisodeByNumber.set(episodeNo, {...episode, episodeNo});
         }
     });
 
     // 最后把 Map 转回数组并按集号升序返回给渲染层
-    return [...latestEpisodeByNumber.values()].sort((a, b) => a.episode - b.episode);
+    return [...latestEpisodeByNumber.values()].sort((a, b) => a.episodeNo - b.episodeNo);
 }
 
 /**
@@ -582,7 +585,7 @@ async function populateEpisodeSelectForSeries(titleSelect, episodeSelect, placeh
     // map 会把每个剧集对象转换成 option 字符串
     // join 后再一次性写回下拉框
     episodeSelect.innerHTML = `<option value="">${placeholderText}</option>${episodes
-        .map((episode) => `<option value="${episode.episode}">第${episode.episode}集</option>`)
+        .map((episode) => `<option value="${episode.episodeNo}">第${episode.episodeNo}集</option>`)
         .join('')}`;
 }
 
@@ -980,14 +983,14 @@ function renderHomePage(container) {
 function renderDetail(container, series) {
     // 当前选中的剧集如果已经不在数据里
     // 就退回到第一集
-    if (series.episodes.length > 0 && !series.episodes.some((ep) => ep.episode === uiState.selectedEpisode)) {
-        uiState.selectedEpisode = series.episodes[0].episode;
+    if (series.episodes.length > 0 && !series.episodes.some((ep) => ep.episodeNo === uiState.selectedEpisode)) {
+        uiState.selectedEpisode = series.episodes[0].episodeNo;
     }
 
     // 切换到新的详情页时
     // 根据当前选中集号把详情页分页同步到正确位置
     if (uiState.activeDetailSeriesName !== series.name) {
-        const selectedIndex = series.episodes.findIndex((ep) => ep.episode === uiState.selectedEpisode);
+        const selectedIndex = series.episodes.findIndex((ep) => ep.episodeNo === uiState.selectedEpisode);
         uiState.episodePage = selectedIndex >= 0 ? Math.floor(selectedIndex / uiState.episodePageSize) + 1 : 1;
         uiState.activeDetailSeriesName = series.name;
     }
@@ -1010,10 +1013,10 @@ function renderDetail(container, series) {
 
     visibleEpisodes.forEach((ep) => {
         const tab = document.createElement('button');
-        tab.className = `episode-tab ${uiState.selectedEpisode === ep.episode ? 'active' : ''}`;
-        tab.textContent = `第${ep.episode}集`;
+        tab.className = `episode-tab ${uiState.selectedEpisode === ep.episodeNo ? 'active' : ''}`;
+        tab.textContent = `第${ep.episodeNo}集`;
         tab.onclick = () => {
-            uiState.selectedEpisode = ep.episode;
+            uiState.selectedEpisode = ep.episodeNo;
             render();
         };
         episodeRow.appendChild(tab);
@@ -1038,7 +1041,7 @@ function renderDetail(container, series) {
 
     // find 会先尝试匹配当前选中的剧集
     // 找不到时再退回到第一集
-    const selected = series.episodes.find((e) => e.episode === uiState.selectedEpisode) || series.episodes[0];
+    const selected = series.episodes.find((e) => e.episodeNo === uiState.selectedEpisode) || series.episodes[0];
     const player = document.getElementById('player');
     const playerMeta = document.getElementById('player-meta');
 
@@ -1051,14 +1054,14 @@ function renderDetail(container, series) {
         return;
     }
 
-    player.src = selected.videoUrl;
+    player.src = selected.episodeUrl;
     playerMeta.innerHTML = `
     <p class="player-meta-title">${escapeHtml(series.name)}</p>
     <p class="player-meta-time-row">
       <span>首次入库：${escapeHtml(formatDateTimeZhCN(selected.firstIngestedAt))}</span>
       <span>最近更新：${escapeHtml(formatDateTimeZhCN(selected.updatedAt))}</span>
     </p>
-    <p class="player-meta-url">${escapeHtml(selected.videoUrl)}</p>
+    <p class="player-meta-url">${escapeHtml(selected.episodeUrl)}</p>
   `;
 }
 
@@ -1606,7 +1609,7 @@ function renderAdminPanel(adminPanelContainer) {
             const selectedEpisodeNo = Number(episodeSelect.value);
             // find 会从当前漫剧的剧集列表里
             // 找出和下拉框集号一致的那一条记录
-            const targetEpisode = episodes.find((episode) => episode.episode === selectedEpisodeNo);
+            const targetEpisode = episodes.find((episode) => episode.episodeNo === selectedEpisodeNo);
 
             if (!targetEpisode) {
                 newEpisodeInput.value = '';
@@ -1614,8 +1617,8 @@ function renderAdminPanel(adminPanelContainer) {
                 return;
             }
 
-            newEpisodeInput.value = String(targetEpisode.episode);
-            videoUrlInput.value = targetEpisode.videoUrl;
+            newEpisodeInput.value = String(targetEpisode.episodeNo);
+            videoUrlInput.value = targetEpisode.episodeUrl;
         };
 
         const syncEpisodeSelectOptions = async () => {
@@ -1641,11 +1644,11 @@ function renderAdminPanel(adminPanelContainer) {
             if (!payload.titleName || Number.isNaN(payload.titleEpisodeNo) || Number.isNaN(payload.newTitleEpisodeNo)) return;
 
             const episodes = await getSeriesEpisodeOptions(payload.titleName);
-            const targetEpisode = episodes.find((episode) => episode.episode === payload.titleEpisodeNo);
+            const targetEpisode = episodes.find((episode) => episode.episodeNo === payload.titleEpisodeNo);
             if (!targetEpisode) return;
 
-            const hasChanged = payload.newTitleEpisodeNo !== targetEpisode.episode
-                || payload.newTitleEpisodeVideo !== String(targetEpisode.videoUrl || '').trim();
+            const hasChanged = payload.newTitleEpisodeNo !== targetEpisode.episodeNo
+                || payload.newTitleEpisodeVideo !== String(targetEpisode.episodeUrl || '').trim();
             if (!hasChanged) return;
 
             try {
