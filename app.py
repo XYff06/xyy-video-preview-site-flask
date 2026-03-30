@@ -243,7 +243,7 @@ def get_required_oss_config():
         if not current
     ]
     if missing:
-        raise Exception(f"缺少OSS配置: {'、'.join(missing)}")
+        raise Exception(f"缺少OSS配置: {"、".join(missing)}")
     return access_key, secret_key, endpoint, region, bucket_name
 
 
@@ -257,7 +257,7 @@ def normalize_and_validate_tag_names(raw_tag_names, db_cursor):
     existing_tag_names = {row["tag_name"] for row in db_cursor.fetchall()}
     missing_tag_names = [tag_name for tag_name in tag_names if tag_name not in existing_tag_names]
     if missing_tag_names:
-        raise Exception(f"以下标签不存在: {'、'.join(missing_tag_names)}")
+        raise Exception(f"以下标签不存在: {"、".join(missing_tag_names)}")
     return tag_names
 
 
@@ -311,7 +311,7 @@ def resolve_resource_to_url(value: str, title_id: str, local_path_kind: str = "a
         key = f"{title_id}/{filename_with_timestamp}"
         response = client.put_object_from_file(bucket_name, key, str(path_object))
         if getattr(response, "status_code", None) != 200:
-            raise Exception(f"上传失败，status_code={getattr(response, 'status_code', 'unknown')}")
+            raise Exception(f"上传失败，status_code={getattr(response, "status_code", "unknown")}")
         return f"https://{bucket_name}.{endpoint}/{key}"
 
     # 目录输入会递归上传所有文件，返回值会是一组可直接访问的地址列表
@@ -337,7 +337,7 @@ def resolve_resource_to_url(value: str, title_id: str, local_path_kind: str = "a
 
             response = client.put_object_from_file(bucket_name, key, str(file_path))
             if getattr(response, "status_code", None) != 200:
-                raise Exception(f"上传失败: {file_path}，status_code={getattr(response, 'status_code', 'unknown')}")
+                raise Exception(f"上传失败: {file_path}，status_code={getattr(response, "status_code", "unknown")}")
 
             url_list.append(f"https://{bucket_name}.{endpoint}/{key}")
 
@@ -417,7 +417,7 @@ def api_titles_patch(title_name):
 
             if update_fields:
                 update_params.append(title_id)
-                db_cursor.execute(f"UPDATE title SET {', '.join(update_fields)} WHERE id = %s", tuple(update_params), )
+                db_cursor.execute(f"UPDATE title SET {", ".join(update_fields)} WHERE id = %s", tuple(update_params), )
     except UniqueViolation:
         return build_json_response(409, message=f"漫剧信息修改失败: 目标漫剧名<{new_title_name}>已存在")
     except Exception as e:
@@ -528,7 +528,7 @@ def api_episodes_patch():
 
             if update_fields:
                 update_params.append(episode_row["id"])
-                db_cursor.execute(f"UPDATE episode SET {', '.join(update_fields)} WHERE id = %s", tuple(update_params), )
+                db_cursor.execute(f"UPDATE episode SET {", ".join(update_fields)} WHERE id = %s", tuple(update_params), )
 
     except UniqueViolation:
         return build_json_response(409, message=f"漫剧<{title_name}>剧集信息修改失败: 目标集号<{new_title_episode_no}>已存在", )
@@ -729,7 +729,7 @@ def api_episodes_batch_directory():
                     message=(
                         f"当前海报资源地址: <{cover_url_text}>\n"
                         f"当前漫剧绑定标签: <{tag_text}>\n"
-                        f"当前已存在剧集数: <{episode_summary_row['total']}>\n"
+                        f"当前已存在剧集数: <{episode_summary_row["total"]}>\n"
                         f"具体集数: <{episode_numbers_text}>\n"
                         f"继续导入可能会新增或更新剧集，请确认是否继续!!!"
                     ),
@@ -817,7 +817,7 @@ def api_titles_get():
     if search:
         values.append(f"%{search.lower()}%")
         filters.append("LOWER(title.name) LIKE %s")
-    where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
+    where_clause = f"WHERE {" AND ".join(filters)}" if filters else ""
     with open_db_connection() as db_connection, db_connection.cursor() as db_cursor:
         db_cursor.execute(f"SELECT COUNT(*)::int AS total FROM title {where_clause}", values)
         total = db_cursor.fetchone()["total"] or 0
@@ -955,32 +955,16 @@ def serialize_series_record(row):
     """把聚合后的漫剧记录转换成前端可直接渲染的结构"""
     episodes = row.get("episodes") or []
     return {
-        "id": row["id"],
-        "name": row["name"],
-        "poster": row["poster"],
-        "firstIngestedAt": convert_to_iso_datetime(row["firstIngestedAt"]),
-        "updatedAt": convert_to_iso_datetime(row["updatedAt"]),
-        "lastNewEpisodeAt": convert_to_iso_datetime(row["lastNewEpisodeAt"]),
-        "tags": row.get("tags") or [],
-        # 列表推导会把聚合结果里的每一集重新整理成统一字段
         "episodes": [
             {
-                "episode": int(episode["episode"]),
+                "episodeNo": int(episode["episodeNo"]),
                 "firstIngestedAt": convert_to_iso_datetime(episode["firstIngestedAt"]),
                 "updatedAt": convert_to_iso_datetime(episode["updatedAt"]),
-                "videoUrl": episode["videoUrl"],
+                "episodeUrl": episode["episodeUrl"],
             }
             for episode in episodes
         ],
     }
-
-
-def serialize_series_detail_record(row):
-    """把详情查询结果整理成详情页可直接消费的结构"""
-    payload = serialize_series_record(row)
-    payload["totalEpisodeCount"] = int(row.get("totalEpisodeCount") or len(payload["episodes"]))
-    payload["currentMaxEpisodeNo"] = int(row.get("currentMaxEpisodeNo") or 0)
-    return payload
 
 
 def query_series_detail_data(title_name: str):
@@ -989,46 +973,16 @@ def query_series_detail_data(title_name: str):
         db_cursor.execute(
             """
             SELECT title.id,
-                   title.name,
-                   title.cover_url                                AS poster,
-                   title.first_ingested_at                        AS "firstIngestedAt",
-                   title.last_new_episode_at                      AS "lastNewEpisodeAt",
-                   title.updated_at                               AS "updatedAt",
-                   title.total_episode_count                      AS "totalEpisodeCount",
-                   title.current_max_episode_no                   AS "currentMaxEpisodeNo",
-                   COALESCE(tag_summary.tags, ARRAY[]::text[])    AS tags,
-                   COALESCE(episode_summary.episodes, '[]'::json) AS episodes
+                   COALESCE((SELECT JSON_AGG(JSON_BUILD_OBJECT('episodeNo', episode.episode_no, 'firstIngestedAt', episode.first_ingested_at, 'updatedAt', episode.updated_at, 'episodeUrl', episode.episode_url) ORDER BY episode.episode_no)
+                             FROM episode
+                             WHERE episode.title_id = title.id), '[]' ::json) AS episodes
             FROM title
-                     LEFT JOIN LATERAL (
-                SELECT COALESCE(
-                               JSON_AGG(
-                                       JSON_BUILD_OBJECT(
-                                               'episode', episode.episode_no,
-                                               'firstIngestedAt', episode.first_ingested_at,
-                                               'updatedAt', episode.updated_at,
-                                               'videoUrl', episode.episode_url
-                                       ) ORDER BY episode.episode_no
-                               ) FILTER(WHERE episode.id IS NOT NULL),
-                               '[]' ::json
-                       ) AS episodes
-                FROM episode
-                WHERE episode.title_id = title.id
-                    ) AS episode_summary ON TRUE
-                     LEFT JOIN LATERAL (
-                SELECT COALESCE(
-                               ARRAY_AGG(tag.tag_name ORDER BY tag.tag_name),
-                               ARRAY[] ::text[]
-                       ) AS tags
-                FROM title_tag
-                         JOIN tag ON tag.id = title_tag.tag_id
-                WHERE title_tag.title_id = title.id
-                    ) AS tag_summary ON TRUE
             WHERE title.name = %s
             """,
             (title_name,),
         )
         row = db_cursor.fetchone()
-    return serialize_series_detail_record(row) if row else None
+    return serialize_series_record(row) if row else None
 
 
 @flask_app.route("/api/series/<path:title_name>", methods=["GET"])
@@ -1036,7 +990,7 @@ def api_series_detail(title_name):
     """按标题名返回单个漫剧详情"""
     payload = query_series_detail_data(unquote(title_name))
     if not payload:
-        return build_json_response(404, message=f"<{title_name}>漫剧不存在")
+        return build_json_response(404, message=f"漫剧<{title_name}>不存在")
     return build_json_response(200, data=payload)
 
 
