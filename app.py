@@ -12,15 +12,16 @@ import psycopg
 import requests
 import tos
 from dotenv import load_dotenv
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, request, render_template
 from psycopg.errors import UniqueViolation
 from psycopg.rows import dict_row
 
-flask_app = Flask(__name__, template_folder="templates", static_folder="static")
+flask_app = Flask(__name__, template_folder="frontend-vue/dist", static_folder="frontend-vue/dist/assets", static_url_path="/assets", )
 flask_app.config["JSON_AS_ASCII"] = False
 
 """load_dotenv"""
 ROOT_DIRECTORY = Path(__file__).resolve().parent
+VUE_BUILD_DIRECTORY = ROOT_DIRECTORY / "frontend-vue" / "dist"
 load_dotenv(ROOT_DIRECTORY / ".env")
 # 判断字符串里是否包含常见视频扩展名，并且扩展名后面要么已经结束，要么后面接的是URL参数?或锚点#，同时忽略大小写
 VIDEO_EXTENSION_RE = re.compile(
@@ -1000,6 +1001,8 @@ def spa(path: str):
     """SPA兜底路由，非API请求统一交给前端入口页面"""
     if path.startswith("api/"):
         return build_json_response(404, message="404 Not Found!!!")
+    if not (VUE_BUILD_DIRECTORY / "index.html").is_file():
+        return build_json_response(404, message="vue前端构建产物不存在，请先执行<<< npm run build >>>")
     return render_template("index.html")
 
 
